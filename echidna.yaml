@@ -3,4 +3,5 @@ corpusDir: echidna-corpus
 balance: 1000000000000000000 # 1 ether
 seqLen: 50
 testLimit: 20000
-cryticArgs: ["--solc-remaps", "@openzeppelin/=node_modules/@openzeppelin/"]
+cryticArgs:
+  ["--solc-remaps", "openzeppelin-contracts/=lib/openzeppelin-contracts/"]
