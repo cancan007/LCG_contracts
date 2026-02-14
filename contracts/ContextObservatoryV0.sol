@@ -111,16 +111,47 @@ contract ContextObservatoryV0 {
 
     bool public openAfterFirstEpoch = true;
 
+    // Belonged epochId of declarations (redeem is independent)
+    uint256 public activeEpochId;
+
+    mapping(uint256 => uint256) public spotlightContextByEpoch; // epochId => contextId
+
+    // epochId => user => claimed
+    mapping(uint256 => mapping(address => bool)) public spotlightBonusClaimed;
+
+    event ActiveEpochSet(uint256 indexed epochId);
+    event SpotlightContextSet(
+        uint256 indexed epochId,
+        uint256 indexed contextId
+    );
+    event SpotlightBonusGranted(
+        uint256 indexed epochId,
+        address indexed user,
+        uint32 newPostsUsed
+    );
+
+    // --- memo policy ---
+    uint256 public constant FIRST_FINALIZE_EPOCH_ID = 1;
+    bool public memoAlwaysPublic;
+
+    event MemoPolicyActivated(uint256 indexed epochId);
+
+    event MemoRevealed(
+        uint256 indexed epochId,
+        uint256 indexed declarationId,
+        address indexed actor,
+        string memoURI,
+        bytes32 memoURIHash
+    );
+
     modifier onlyAuthor() {
         require(msg.sender == author, "only author");
         _;
     }
 
-    constructor(address _author, address _authorNft) {
+    constructor(address _author) {
         require(_author != address(0), "author=0");
         author = _author;
-        require(_authorNft != address(0), "nft=0");
-        authorNft = IAuthorContextNFT(_authorNft);
     }
 
     function setAuthorNft(address nft) external onlyAuthor {
@@ -181,7 +212,8 @@ contract ContextObservatoryV0 {
         TargetSpace targetSpace,
         TargetTime targetTime,
         bytes32 targetRef,
-        bytes32 memoHash
+        bytes32 memoHash,
+        string calldata memoURI
     ) external returns (uint256 declarationId, bytes32 commitHash) {
         require(spanEnd >= spanStart, "bad span");
         require(
@@ -203,6 +235,22 @@ contract ContextObservatoryV0 {
 
         declarationId = nextDeclarationId++;
 
+        uint256 ep = activeEpochId;
+
+        if (memoAlwaysPublic) {
+            require(bytes(memoURI).length != 0, "memoURI required");
+            bytes32 memoURIHash = keccak256(bytes(memoURI));
+            require(memoURIHash == memoHash, "memoURI hash mismatch");
+
+            emit MemoRevealed(
+                activeEpochId,
+                declarationId,
+                msg.sender,
+                memoURI,
+                memoURIHash
+            );
+        }
+
         commitHash = keccak256(
             abi.encode(
                 bytes32("LCG_DECL_V0"),
@@ -221,6 +269,22 @@ contract ContextObservatoryV0 {
 
         declarationCommit[declarationId] = commitHash;
         postsUsed[msg.sender] += 1;
+
+        uint256 spotlight = spotlightContextByEpoch[ep];
+
+        if (
+            useStakeGating &&
+            stake[msg.sender] > 0 &&
+            spotlight != 0 &&
+            sourceContextId == spotlight &&
+            !spotlightBonusClaimed[ep][msg.sender]
+        ) {
+            // “post rights +1” = Decrease postsUsed by 1 to effectively increase the quota, which is the simplest approach
+            postsUsed[msg.sender] -= 1;
+
+            spotlightBonusClaimed[ep][msg.sender] = true;
+            emit SpotlightBonusGranted(ep, msg.sender, postsUsed[msg.sender]);
+        }
 
         emit DeclarationCommitted(
             declarationId,
@@ -251,6 +315,15 @@ contract ContextObservatoryV0 {
             redeemEnabled: enableRedeemNow
         });
         emit EpochFinalized(epochId, merkleRoot, enableRedeemNow);
+
+        if (
+            !memoAlwaysPublic &&
+            epochId == FIRST_FINALIZE_EPOCH_ID &&
+            merkleRoot != bytes32(0)
+        ) {
+            memoAlwaysPublic = true;
+            emit MemoPolicyActivated(epochId);
+        }
 
         if (openAfterFirstEpoch && relationMode == RelationMode.AUTHOR_ONLY) {
             relationMode = RelationMode.OPEN;
@@ -296,5 +369,18 @@ contract ContextObservatoryV0 {
 
         authorNft.mint(msg.sender, tokenId, tokenURI, metadataContentHash);
         emit Redeemed(epochId, msg.sender, tokenId, leaf);
+    }
+
+    function setActiveEpoch(uint256 epochId) external onlyAuthor {
+        activeEpochId = epochId;
+        emit ActiveEpochSet(epochId);
+    }
+
+    function setSpotlightContext(
+        uint256 epochId,
+        uint256 contextId
+    ) external onlyAuthor {
+        spotlightContextByEpoch[epochId] = contextId;
+        emit SpotlightContextSet(epochId, contextId);
     }
 }

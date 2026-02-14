@@ -22,8 +22,8 @@ contract Deploy is Script {
 
         // Make the observatory the owner so it can mint on redeem().
         authorNft = new AuthorContextNFT(
-            "Author Context",
-            "ACXT",
+            "Nothing but a Number Paradox",
+            "NBNP",
             address(observatory)
         );
 
