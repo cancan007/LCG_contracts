@@ -1,0 +1,5 @@
+testMode: property
+corpusDir: echidna-corpus
+seqLen: 50
+testLimit: 20000
+cryticArgs: ["--solc-remaps", "@openzeppelin/=node_modules/@openzeppelin/"]

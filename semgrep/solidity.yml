@@ -1,0 +1,25 @@
+rules:
+  - id: solidity-tx-origin
+    pattern: tx.origin
+    message: "Avoid tx.origin for auth (phishing risk)."
+    severity: ERROR
+    languages: [solidity]
+
+  - id: solidity-lowlevel-call
+    pattern: |
+      $X.call($Y)
+    message: "Low-level call found. Ensure return value checked and reentrancy considered."
+    severity: WARNING
+    languages: [solidity]
+
+  - id: solidity-delegatecall
+    pattern: delegatecall($X)
+    message: "delegatecall is dangerous; ensure strict controls and audits."
+    severity: WARNING
+    languages: [solidity]
+
+  - id: solidity-selfdestruct
+    pattern: selfdestruct($X)
+    message: "Avoid selfdestruct (unexpected behavior and upgrade risks)."
+    severity: WARNING
+    languages: [solidity]

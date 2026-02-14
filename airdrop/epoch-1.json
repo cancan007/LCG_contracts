@@ -1,0 +1,14 @@
+{
+  "epochId": 1,
+  "claims": [
+    {
+      "user": "0x1111111111111111111111111111111111111111",
+      "tokenId": "1001",
+      "tokenURI": "ipfs://cid-token-1001",
+      "metadata": {
+        "name": "t1001",
+        "description": "u1"
+      }
+    }
+  ]
+}

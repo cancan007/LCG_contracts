@@ -1,0 +1,25 @@
+{
+  "name": "lcg-context-observatory-v0",
+  "private": true,
+  "scripts": {
+    "merkle": "node --loader ts-node/esm scripts/build-merkle.ts airdrop/epoch-1.json airdrop/epoch-1.proofs.json",
+    "build": "forge build",
+    "slither": "slither . --config-file slither.config.json",
+    "semgrep": "semgrep scan --config semgrep/solidity.yml contracts",
+    "echidna": "bash scripts/run-echidna-docker.sh",
+    "fuzz": "forge test -vv",
+    "format": "prettier --write ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.0.0",
+    "prettier": "^3.8.1",
+    "prettier-plugin-solidity": "^2.2.1"
+  },
+  "dependencies": {
+    "ethers": "^6.0.0",
+    "keccak256": "^1.0.6",
+    "merkletreejs": "^0.4.0"
+  }
+}

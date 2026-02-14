@@ -1,0 +1,18 @@
+node_modules
+cache
+artifacts
+typechain-types
+coverage
+crytic-export
+coverage.json
+.env
+.DS_Store
+
+# Foundry
+foundry/out
+foundry/cache
+out
+cache
+
+# Echidna
+echidna-corpus
