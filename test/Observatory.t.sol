@@ -39,7 +39,9 @@ contract ObservatoryTest is Test {
         // user1 redeem
         vm.prank(user1);
         bytes32[] memory proof = new bytes32[](1);
-        proof[0] = keccak256(abi.encode(EPOCH, user2, uint256(1002), keccak256(bytes(_meta2()))));
+        proof[0] = keccak256(
+            abi.encode(EPOCH, user2, uint256(1002), keccak256(bytes(_meta2())))
+        );
         obs.redeem(EPOCH, 1001, "ipfs://cid-token-1001", _meta1(), proof);
 
         assertEq(nft.ownerOf(1001), user1);
@@ -54,7 +56,9 @@ contract ObservatoryTest is Test {
     function testUser2Redeem() public {
         vm.prank(user2);
         bytes32[] memory proof = new bytes32[](1);
-        proof[0] = keccak256(abi.encode(EPOCH, user1, uint256(1001), keccak256(bytes(_meta1()))));
+        proof[0] = keccak256(
+            abi.encode(EPOCH, user1, uint256(1001), keccak256(bytes(_meta1())))
+        );
         obs.redeem(EPOCH, 1002, "ipfs://cid-token-1002", _meta2(), proof);
         assertEq(nft.ownerOf(1002), user2);
     }

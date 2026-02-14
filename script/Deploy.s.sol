@@ -9,7 +9,10 @@ import {AuthorContextNFT} from "../contracts/AuthorContextNFT.sol";
 /// Usage:
 ///   forge script script/Deploy.s.sol:Deploy --rpc-url $RPC_URL --private-key $PRIVATE_KEY --broadcast
 contract Deploy is Script {
-    function run() external returns (ContextObservatoryV0 observatory, AuthorContextNFT authorNft) {
+    function run()
+        external
+        returns (ContextObservatoryV0 observatory, AuthorContextNFT authorNft)
+    {
         vm.startBroadcast();
 
         // msg.sender during broadcast is the EOA that signs the txs (your deployer).
@@ -18,7 +21,11 @@ contract Deploy is Script {
         observatory = new ContextObservatoryV0(author);
 
         // Make the observatory the owner so it can mint on redeem().
-        authorNft = new AuthorContextNFT("Author Context", "ACXT", address(observatory));
+        authorNft = new AuthorContextNFT(
+            "Author Context",
+            "ACXT",
+            address(observatory)
+        );
 
         observatory.setAuthorNft(address(authorNft));
 

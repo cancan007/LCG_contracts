@@ -22,7 +22,8 @@ function canonicalize(value: any): string {
   // Canonical JSON: recursively sort object keys, no extra whitespace.
   if (value === null || value === undefined) return "null";
   if (typeof value === "number") {
-    if (!Number.isFinite(value)) throw new Error("Non-finite number in metadata");
+    if (!Number.isFinite(value))
+      throw new Error("Non-finite number in metadata");
     return String(value);
   }
   if (typeof value === "boolean") return value ? "true" : "false";
@@ -32,7 +33,13 @@ function canonicalize(value: any): string {
   }
   if (typeof value === "object") {
     const keys = Object.keys(value).sort();
-    return "{" + keys.map((k) => JSON.stringify(k) + ":" + canonicalize(value[k])).join(",") + "}";
+    return (
+      "{" +
+      keys
+        .map((k) => JSON.stringify(k) + ":" + canonicalize(value[k]))
+        .join(",") +
+      "}"
+    );
   }
   throw new Error(`Unsupported metadata type: ${typeof value}`);
 }
@@ -45,8 +52,16 @@ function metadataContentHash(metadataJsonCanonical: string): string {
   return "0x" + keccak256(bytes).toString("hex");
 }
 
-function leaf(epochId: bigint, user: string, tokenId: bigint, contentHash: string): string {
-  const encoded = abi.encode(["uint256", "address", "uint256", "bytes32"], [epochId, user, tokenId, contentHash]);
+function leaf(
+  epochId: bigint,
+  user: string,
+  tokenId: bigint,
+  contentHash: string,
+): string {
+  const encoded = abi.encode(
+    ["uint256", "address", "uint256", "bytes32"],
+    [epochId, user, tokenId, contentHash],
+  );
   return solidityKeccak(encoded);
 }
 
@@ -94,7 +109,8 @@ function main() {
     epochId: input.epochId,
     merkleRoot: root,
     sortPairs: true,
-    leafSpec: "keccak256(abi.encode(epochId, user, tokenId, keccak256(bytes(metadataJsonCanonical))))",
+    leafSpec:
+      "keccak256(abi.encode(epochId, user, tokenId, keccak256(bytes(metadataJsonCanonical))))",
     claims,
   };
 

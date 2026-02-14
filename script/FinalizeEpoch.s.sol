@@ -25,7 +25,11 @@ contract FinalizeEpoch is Script {
         bool enableRedeem = vm.envBool("ENABLE_REDEEM");
 
         vm.startBroadcast();
-        ContextObservatoryV0(obsAddr).finalizeEpoch(epochId, root, enableRedeem);
+        ContextObservatoryV0(obsAddr).finalizeEpoch(
+            epochId,
+            root,
+            enableRedeem
+        );
         vm.stopBroadcast();
     }
 }

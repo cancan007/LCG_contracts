@@ -4,7 +4,12 @@ pragma solidity ^0.8.23;
 import {MerkleProof} from "openzeppelin-contracts/contracts/utils/cryptography/MerkleProof.sol";
 
 interface IAuthorContextNFT {
-    function mint(address to, uint256 tokenId, string calldata uri, bytes32 metadataContentHash) external;
+    function mint(
+        address to,
+        uint256 tokenId,
+        string calldata uri,
+        bytes32 metadataContentHash
+    ) external;
 }
 
 /// @notice Minimal Context Observatory:
@@ -13,13 +18,37 @@ interface IAuthorContextNFT {
 /// - Users redeem (mint) AuthorContextNFT by Merkle proof
 /// - relationMode toggles AUTHOR_ONLY -> OPEN
 contract ContextObservatoryV0 {
-    enum MeaningGranularity { SUMMARY, STORY, COUNTEREXAMPLE }
-    enum QuoteForm { QUOTE, PARAPHRASE }
-    enum TargetSpace { SELF, YOU, PARTICULAR, PUBLIC }
-    enum TargetTime { PAST, FUTURE, TIMELESS }
-    enum RelationMode { AUTHOR_ONLY, OPEN }
+    enum MeaningGranularity {
+        SUMMARY,
+        STORY,
+        COUNTEREXAMPLE
+    }
+    enum QuoteForm {
+        QUOTE,
+        PARAPHRASE
+    }
+    enum TargetSpace {
+        SELF,
+        YOU,
+        PARTICULAR,
+        PUBLIC
+    }
+    enum TargetTime {
+        PAST,
+        FUTURE,
+        TIMELESS
+    }
+    enum RelationMode {
+        AUTHOR_ONLY,
+        OPEN
+    }
 
-    event ContextCreated(uint256 indexed contextId, address indexed creator, bytes32 contentHash, string uri);
+    event ContextCreated(
+        uint256 indexed contextId,
+        address indexed creator,
+        bytes32 contentHash,
+        string uri
+    );
 
     event DeclarationCommitted(
         uint256 indexed declarationId,
@@ -36,8 +65,17 @@ contract ContextObservatoryV0 {
         bytes32 memoHash
     );
 
-    event EpochFinalized(uint256 indexed epochId, bytes32 merkleRoot, bool redeemEnabled);
-    event Redeemed(uint256 indexed epochId, address indexed user, uint256 indexed tokenId, bytes32 leaf);
+    event EpochFinalized(
+        uint256 indexed epochId,
+        bytes32 merkleRoot,
+        bool redeemEnabled
+    );
+    event Redeemed(
+        uint256 indexed epochId,
+        address indexed user,
+        uint256 indexed tokenId,
+        bytes32 leaf
+    );
     event RelationModeChanged(RelationMode mode);
 
     address public immutable author;
@@ -78,9 +116,11 @@ contract ContextObservatoryV0 {
         _;
     }
 
-    constructor(address _author) {
+    constructor(address _author, address _authorNft) {
         require(_author != address(0), "author=0");
         author = _author;
+        require(_authorNft != address(0), "nft=0");
+        authorNft = IAuthorContextNFT(_authorNft);
     }
 
     function setAuthorNft(address nft) external onlyAuthor {
@@ -88,7 +128,10 @@ contract ContextObservatoryV0 {
         authorNft = IAuthorContextNFT(nft);
     }
 
-    function setPostPolicy(uint32 _baseLimit, bool _useStakeGating) external onlyAuthor {
+    function setPostPolicy(
+        uint32 _baseLimit,
+        bool _useStakeGating
+    ) external onlyAuthor {
         basePostLimit = _baseLimit;
         useStakeGating = _useStakeGating;
     }
@@ -105,7 +148,7 @@ contract ContextObservatoryV0 {
     function withdrawStake(uint256 amount) external {
         require(stake[msg.sender] >= amount, "insufficient stake");
         stake[msg.sender] -= amount;
-        (bool ok,) = msg.sender.call{value: amount}("");
+        (bool ok, ) = msg.sender.call{value: amount}("");
         require(ok, "withdraw failed");
     }
 
@@ -115,7 +158,10 @@ contract ContextObservatoryV0 {
         return basePostLimit + extra;
     }
 
-    function createContext(bytes32 contentHash, string calldata uri) external returns (uint256 contextId) {
+    function createContext(
+        bytes32 contentHash,
+        string calldata uri
+    ) external returns (uint256 contextId) {
         contextId = nextContextId++;
         contextCreator[contextId] = msg.sender;
         contextContentHash[contextId] = contentHash;
@@ -125,6 +171,7 @@ contract ContextObservatoryV0 {
 
     /// @notice Canonical on-chain commit hash for a declaration.
     /// This fixes the hashing scheme (transparency + interoperability).
+    /// NOTE: This is main function for commiting future protocol.
     function commitDeclaration(
         uint256 sourceContextId,
         uint32 spanStart,
@@ -137,14 +184,21 @@ contract ContextObservatoryV0 {
         bytes32 memoHash
     ) external returns (uint256 declarationId, bytes32 commitHash) {
         require(spanEnd >= spanStart, "bad span");
-        require(postsUsed[msg.sender] < _allowedPosts(msg.sender), "post limit");
+        require(
+            postsUsed[msg.sender] < _allowedPosts(msg.sender),
+            "post limit"
+        );
 
         // AUTHOR_ONLY: keep minimal signal (user -> author), reduce noise.
         if (relationMode == RelationMode.AUTHOR_ONLY) {
             if (targetSpace == TargetSpace.YOU) {
-                require(targetRef == bytes32(uint256(uint160(author))), "YOU must be author");
+                require(
+                    targetRef == bytes32(uint256(uint160(author))),
+                    "YOU must be author"
+                );
             }
-            if (targetSpace == TargetSpace.PARTICULAR) revert("PARTICULAR disabled in AUTHOR_ONLY");
+            if (targetSpace == TargetSpace.PARTICULAR)
+                revert("PARTICULAR disabled in AUTHOR_ONLY");
         }
 
         declarationId = nextDeclarationId++;
@@ -187,8 +241,15 @@ contract ContextObservatoryV0 {
     /// @notice Commit epoch distribution.
     /// Leaf spec:
     /// leaf = keccak256(abi.encode(epochId, user, tokenId, metadataContentHash))
-    function finalizeEpoch(uint256 epochId, bytes32 merkleRoot, bool enableRedeemNow) external onlyAuthor {
-        epochs[epochId] = Epoch({merkleRoot: merkleRoot, redeemEnabled: enableRedeemNow});
+    function finalizeEpoch(
+        uint256 epochId,
+        bytes32 merkleRoot,
+        bool enableRedeemNow
+    ) external onlyAuthor {
+        epochs[epochId] = Epoch({
+            merkleRoot: merkleRoot,
+            redeemEnabled: enableRedeemNow
+        });
         emit EpochFinalized(epochId, merkleRoot, enableRedeemNow);
 
         if (openAfterFirstEpoch && relationMode == RelationMode.AUTHOR_ONLY) {
@@ -197,7 +258,10 @@ contract ContextObservatoryV0 {
         }
     }
 
-    function setRedeemEnabled(uint256 epochId, bool enabled) external onlyAuthor {
+    function setRedeemEnabled(
+        uint256 epochId,
+        bool enabled
+    ) external onlyAuthor {
         epochs[epochId].redeemEnabled = enabled;
         emit EpochFinalized(epochId, epochs[epochId].merkleRoot, enabled);
     }
@@ -219,9 +283,14 @@ contract ContextObservatoryV0 {
         require(address(authorNft) != address(0), "authorNft not set");
 
         bytes32 metadataContentHash = keccak256(bytes(metadataJsonCanonical));
-        bytes32 leaf = keccak256(abi.encode(epochId, msg.sender, tokenId, metadataContentHash));
+        bytes32 leaf = keccak256(
+            abi.encode(epochId, msg.sender, tokenId, metadataContentHash)
+        );
 
-        require(MerkleProof.verify(merkleProof, e.merkleRoot, leaf), "invalid proof");
+        require(
+            MerkleProof.verify(merkleProof, e.merkleRoot, leaf),
+            "invalid proof"
+        );
         require(!claimedLeaf[epochId][leaf], "already claimed");
         claimedLeaf[epochId][leaf] = true;
 
