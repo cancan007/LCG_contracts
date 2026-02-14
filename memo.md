@@ -24,18 +24,26 @@
   - 結論: そのままURI形式にする
 - 現状、context:commit=1:多
 - NOTE: memoHash（おそらく、他のcontextを読んだユーザーの感想？みたいな位置付けになる文のハッシュ）を見えるようにするかどうか
+  - 結論: finalize(epochId=1)後にmemoContentは常に公開されるようにする
 
 4. finalize, setEnableRedeem(author側処理)
 
 - NOTE: もしかすると、ここで一部epochの違いでredeemがうまくいかない人が出てくる可能性あり（もし、ユーザーごとのredeem権限にepochIDの紐付けをpostまたはcreateContext時にしていたら）(merkleRootで線型化する範囲は各々のユーザーのcommit?なら問題なし、全てなら問題が起きる可能性高い)
+  - 結論: author依存のため心配なし
 
-4. redeem(status: claimed)
+5. redeem(status: claimed)
 
 # AA cover area
 
 1. createContext
 2. post(declare)
 3. redeem
+
+# Observation Perspective
+
+- 既存設計だと以下のようになるイメージ
+  - 初期は同一ユーザーがcontext作成/commit(decraration)でspanStart~Endは作成したもの全てになるかなと思ってる
+  - finalize後に、context作成者とcommit(decraration)が徐々に異なるユーザーになっていく(引用の粒度もどんどん細かくなる)
 
 ---
 
