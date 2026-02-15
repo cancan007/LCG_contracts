@@ -8,7 +8,8 @@
     "semgrep": "semgrep scan --config semgrep/solidity.yml contracts",
     "echidna": "bash scripts/run-echidna-docker.sh",
     "fuzz": "forge test -vv",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "extract-abi": "jq '.abi' out/ContextObservatoryV0.sol/ContextObservatoryV0.json > abi/ContextObservatoryV0.json"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
