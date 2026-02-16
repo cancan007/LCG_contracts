@@ -11,8 +11,7 @@
 
 1. stake(初めはなし。2epochからあり)
 
-- 現状、1ETH預け入れで1post追加される想定(L2ならそこまで重要じゃない)
-- TODO: 粗利として時間差でpost数が増えるようにする(上のstakeはただの対策でしかない)
+- 現状、1ETH預け入れで1post追加される想定(L2ならそこまで重要じゃない)(withdrawして再度stakeしても復活しない)
 
 2. createContext
 
@@ -36,7 +35,7 @@
 # AA cover area
 
 1. createContext
-2. post(declare)
+2. commitDeclaration
 3. redeem
 
 # Observation Perspective
@@ -52,7 +51,7 @@
 - SmartAccount: ユーザーの「意図」の検証・権限有無などを統括するAAコントラクト
   - laneKey(処理文脈の識別子)
     - 1: ContextObservatoryV0.sol関連のdAppユーザー処理
-      - executor: ContextObservatoryV0.sol
+      - executor: ContextObservatoryV0.solの代理処理用forwarder
       - validator: ??
   - Plugins(ERC6900系): executorの文脈処理依存の検証方法そのものを柔軟に拡張するもの
   - Modules(ERC7579系): プロトコルレベルの形式そのものを補償・担保するもの
