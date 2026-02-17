@@ -77,6 +77,8 @@ Value is abstracted from absolute numerical indicators into contextual trace.
 
 This project also explores architectural clarification for AA in L3-oriented ecosystems.
 
+![current AA whole image](./images/self-analysis/intent_aa_sa_design_image.png)
+
 ## Problem
 
 In UX-driven L3 directions, the boundaries between:
