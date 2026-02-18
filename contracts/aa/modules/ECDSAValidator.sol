@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IValidator} from "../interfaces/ERC7579.sol";
+import {IValidator, ModuleType} from "../interfaces/ERC7579.sol";
 import {ECDSA} from "../libs/ECDSA.sol";
 
 /// @notice Simple ECDSA validator module (ERC-7579-style).
@@ -14,6 +14,12 @@ contract ECDSAValidator is IValidator {
     address public owner;
 
     error NotInitialized();
+
+    function isModuleType(
+        uint256 moduleTypeId
+    ) external pure override returns (bool) {
+        return moduleTypeId == ModuleType.VALIDATOR;
+    }
 
     function onInstall(bytes calldata data) external override {
         owner = abi.decode(data, (address));

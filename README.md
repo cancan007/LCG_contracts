@@ -179,6 +179,29 @@ emphasizing secure permissioning and interoperability.)
 
 ---
 
+## Account Abstraction (ERC-4337 v0.7 + laneKey domain config)
+
+This repo also contains an experimental **SmartAccount** scaffold:
+
+- **ERC-4337 EntryPoint v0.7** style `validateUserOp(PackedUserOperation)`
+- **ERC-7579-ish modules**: validator / executor / hook (install/uninstall)
+- A 192-bit **laneKey** represents the “domain context” (e.g. `industry/app/action`).
+- Per-lane configuration is stored as `LaneConfig { validator, validationHook, executor, execHook }`.
+- Execution hooks are fixed at the protocol level: **pre** + **post**. To keep SmartAccount simple, use a single hook module per lane (recommended: `ExecutionHookAggregator`) that internally fans out to N pre/post hooks.
+
+### Manual lane selection without changing the execute() signature
+
+`SmartAccount.execute(to, value, data)` accepts either:
+
+- **raw**: `data == innerCallData`, laneKey defaults to `0`
+- **wrapped**: `data = abi.encode(uint192 laneKey, bytes innerCallData)`
+
+So the lane can be selected purely by how you encode `data` (no new params).
+
+> Tip: For UserOps, bind execution to validation by using `executeUserOp(..., fullNonce)` and enforcing `fullNonce == userOp.nonce` in a validation hook (e.g. `NonceBoundCallDataValidationHook`).
+
+--
+
 ## Toward Meaning-Aware Validation
 
 As AA validators become domain-dependent (inevitable in L3 UX-heavy systems),

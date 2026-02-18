@@ -42,16 +42,22 @@ contract Attacker {
         );
     }
 
-    function tryInstallPlugin(
+    function trySetLaneConfig(
         address account,
-        address plugin,
-        bytes calldata data
+        uint192 laneKey,
+        address validator,
+        address validationHook,
+        address executor,
+        address execHook
     ) external returns (bool ok) {
         (ok, ) = account.call(
             abi.encodeWithSignature(
-                "installPlugin(address,bytes)",
-                plugin,
-                data
+                "setLaneConfig(uint192,address,address,address,address)",
+                laneKey,
+                validator,
+                validationHook,
+                executor,
+                execHook
             )
         );
     }
@@ -62,7 +68,7 @@ contract Attacker {
 contract SmartAccountEchidnaHarness {
     MockEntryPointV07 ep;
     ECDSAValidator validator;
-    AllowAllHook hook;
+    AllowAllHook execHook;
     SimpleExecutor execModule;
     SmartAccount account;
     Attacker attacker;
@@ -70,7 +76,7 @@ contract SmartAccountEchidnaHarness {
     constructor() {
         ep = new MockEntryPointV07();
         validator = new ECDSAValidator();
-        hook = new AllowAllHook();
+        execHook = new AllowAllHook();
         execModule = new SimpleExecutor();
 
         // Owner is this harness contract.
@@ -81,12 +87,17 @@ contract SmartAccountEchidnaHarness {
             abi.encode(address(this))
         );
 
-        // Install hook/executor as owner.
-        account.installModule(ModuleType.HOOK, address(hook), "");
-        account.installModule(
-            ModuleType.EXECUTOR, //NOTE: this should be laneKey, not ModuleSolidEnum value
+        // Install modules as owner.
+        account.installModule(ModuleType.HOOK, address(execHook), "");
+        account.installModule(ModuleType.EXECUTOR, address(execModule), "");
+
+        // Default lane (laneKey=0)
+        account.setLaneConfig(
+            uint192(0),
+            address(validator),
+            address(0),
             address(execModule),
-            abi.encode(uint192(0), abi.encode(uint192(0), ""))
+            address(execHook)
         );
 
         attacker = new Attacker();
@@ -94,7 +105,6 @@ contract SmartAccountEchidnaHarness {
 
     // --- Properties ---
 
-    /// @notice Attacker cannot execute arbitrary calls.
     function echidna_attacker_cannot_execute() public returns (bool) {
         bool ok = attacker.tryExecute(
             address(account),
@@ -105,23 +115,24 @@ contract SmartAccountEchidnaHarness {
         return ok == false;
     }
 
-    /// @notice Attacker cannot install modules.
     function echidna_attacker_cannot_install_module() public returns (bool) {
         bool ok = attacker.tryInstallModule(
             address(account),
             ModuleType.HOOK,
-            address(hook),
+            address(execHook),
             ""
         );
         return ok == false;
     }
 
-    /// @notice Attacker cannot install plugins.
-    function echidna_attacker_cannot_install_plugin() public returns (bool) {
-        bool ok = attacker.tryInstallPlugin(
+    function echidna_attacker_cannot_set_lane_config() public returns (bool) {
+        bool ok = attacker.trySetLaneConfig(
             address(account),
-            address(hook),
-            ""
+            uint192(1),
+            address(validator),
+            address(0),
+            address(execModule),
+            address(execHook)
         );
         return ok == false;
     }

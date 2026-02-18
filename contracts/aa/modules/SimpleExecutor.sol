@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IExecutor} from "../interfaces/ERC7579.sol";
+import {IExecutor, ModuleType} from "../interfaces/ERC7579.sol";
 
 /// @notice Executor module that forwards execution from the account.
 /// IMPORTANT: In production, scope permissions (targets/selectors/spend limits).
@@ -10,16 +10,17 @@ contract SimpleExecutor is IExecutor {
 
     error OnlyAccount();
 
-    function onInstall(bytes calldata data) external override {
-        (uint192 laneKey, bytes memory init) = abi.decode(
-            data,
-            (uint192, bytes)
-        );
+    function onInstall(bytes calldata) external override {
         account = msg.sender;
     }
 
     function onUninstall(bytes calldata) external override {
         account = address(0);
+    }
+    function isModuleType(
+        uint256 moduleTypeId
+    ) external pure override returns (bool) {
+        return moduleTypeId == ModuleType.EXECUTOR;
     }
 
     function execute(
