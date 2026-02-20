@@ -1,40 +1,44 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
+import {PackedUserOperation} from "./PackedUserOperation.sol";
+
+/// @dev Module type ids per ERC-7579:
+/// 1 = Validator, 2 = Executor, 3 = Fallback, 4 = Hook
 library ModuleType {
     uint256 internal constant VALIDATOR = 1;
     uint256 internal constant EXECUTOR = 2;
-    uint256 internal constant HOOK = 3;
-    uint256 internal constant FALLBACK = 4;
+    uint256 internal constant FALLBACK = 3;
+    uint256 internal constant HOOK = 4;
 }
 
+/// @dev ERC-7579 core module interface (minimal).
 interface IModule {
     function onInstall(bytes calldata data) external;
-
-    /**
-     * @dev This function is called by the smart account during uninstallation of the module
-     * @param data arbitrary data that may be required on the module during `onUninstall` de-initialization
-     *
-     * MUST revert on error
-     */
     function onUninstall(bytes calldata data) external;
 
-    /**
-     * @dev Returns boolean value if module is a certain type
-     * @param moduleTypeId the module type ID according the ERC-7579 spec
-     *
-     * MUST return true if the module is of the given type and false otherwise
-     */
+    /// MUST return true if the module is of the given type.
     function isModuleType(uint256 moduleTypeId) external view returns (bool);
 }
 
+/// @dev ERC-7579 validator interface.
+/// NOTE: validateUserOp is NOT view (may touch state, though SHOULD be careful).
 interface IValidator is IModule {
+    /// SHOULD return ERC-4337 SIG_VALIDATION_FAILED (1) on signature mismatch (and not revert).
     function validateUserOp(
-        bytes32 userOpHash,
+        PackedUserOperation calldata userOp,
+        bytes32 userOpHash
+    ) external returns (uint256);
+
+    /// ERC-1271 forwarding helper (optional but recommended by ERC-7579).
+    function isValidSignatureWithSender(
+        address sender,
+        bytes32 hash,
         bytes calldata signature
-    ) external view returns (bool);
+    ) external view returns (bytes4);
 }
 
+/// @dev Executor module (ERC-7579 only requires IModule; execute() is a common extension we use internally).
 interface IExecutor is IModule {
     function execute(
         address to,
@@ -43,42 +47,39 @@ interface IExecutor is IModule {
     ) external returns (bytes memory ret);
 }
 
+/// @dev ERC-7579 hook interface (optional extension in ERC-7579).
 interface IHook is IModule {
     function preCheck(
-        address caller,
-        address to,
+        address msgSender,
         uint256 value,
-        bytes calldata data
-    ) external;
-    function postCheck(
-        address caller,
-        address to,
-        uint256 value,
-        bytes calldata data,
-        bool success,
-        bytes calldata ret
-    ) external;
+        bytes calldata msgData
+    ) external returns (bytes memory hookData);
+
+    function postCheck(bytes calldata hookData) external;
 }
 
+/// @dev Account-side module manager interface (subset).
 interface IModuleManager {
-    event ModuleInstalled(uint256 indexed moduleType, address indexed module);
-    event ModuleUninstalled(uint256 indexed moduleType, address indexed module);
+    event ModuleInstalled(uint256 moduleTypeId, address module);
+    event ModuleUninstalled(uint256 moduleTypeId, address module);
 
     function installModule(
-        uint256 moduleType,
+        uint256 moduleTypeId,
         address module,
-        bytes calldata data
+        bytes calldata initData
     ) external;
+
     function uninstallModule(
-        uint256 moduleType,
+        uint256 moduleTypeId,
         address module,
-        bytes calldata data
+        bytes calldata deInitData
     ) external;
+
     function isModuleInstalled(
-        uint256 moduleType,
-        address module
+        uint256 moduleTypeId,
+        address module,
+        bytes calldata additionalContext
     ) external view returns (bool);
-    function getModules(
-        uint256 moduleType
-    ) external view returns (address[] memory);
+
+    function getModules(uint256 moduleTypeId) external view returns (address[] memory);
 }

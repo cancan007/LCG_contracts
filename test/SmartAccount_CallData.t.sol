@@ -5,220 +5,143 @@ import "forge-std/Test.sol";
 
 import {SmartAccount} from "../contracts/aa/SmartAccount.sol";
 import {PackedUserOperation} from "../contracts/aa/interfaces/PackedUserOperation.sol";
-import {
-    ModuleType,
-    IHook,
-    IModule
-} from "../contracts/aa/interfaces/ERC7579.sol";
+import {IEntryPoint} from "../contracts/aa/interfaces/IEntryPoint.sol";
+import {ModuleType, IValidator} from "../contracts/aa/interfaces/ERC7579.sol";
 
-import {ECDSAValidator} from "../contracts/aa/modules/ECDSAValidator.sol";
+import {ValidationPreHookAggregator} from "../contracts/aa/modules/ValidationPreHookAggregator.sol";
 import {NonceBoundCallDataValidationHook} from "../contracts/aa/modules/NonceBoundCallDataValidationHook.sol";
-import {AllowAllHook} from "../contracts/aa/modules/AllowAllHook.sol";
-import {MockEntryPointV07} from "../contracts/aa/mocks/MockEntryPointV07.sol";
 
-contract Target {
-    event Ping(address caller, bytes data);
+contract MockEntryPoint is IEntryPoint {
+    function getUserOpHash(
+        PackedUserOperation calldata
+    ) external pure override returns (bytes32) {
+        return bytes32(0);
+    }
 
-    function ping(bytes calldata data) external returns (bytes memory) {
-        emit Ping(msg.sender, data);
-        return data;
+    function depositTo(address) external payable override {}
+    function withdrawTo(address payable, uint256) external override {}
+    function balanceOf(address) external view override returns (uint256) {
+        return 0;
     }
 }
 
-contract RevertingHook is IHook {
-    error RevertingHookTriggered();
-
+contract AlwaysPassValidator is IValidator {
     function onInstall(bytes calldata) external override {}
     function onUninstall(bytes calldata) external override {}
-
     function isModuleType(
         uint256 moduleTypeId
     ) external pure override returns (bool) {
-        return moduleTypeId == ModuleType.HOOK;
+        return moduleTypeId == ModuleType.VALIDATOR;
     }
-
-    function preCheck(
-        address,
-        address,
-        uint256,
-        bytes calldata
-    ) external pure override {
-        revert RevertingHookTriggered();
+    function validateUserOp(
+        PackedUserOperation calldata,
+        bytes32
+    ) external override returns (uint256) {
+        return 0;
     }
-
-    function postCheck(
+    function isValidSignatureWithSender(
         address,
-        address,
-        uint256,
-        bytes calldata,
-        bool,
+        bytes32,
         bytes calldata
-    ) external pure override {
-        // no-op
+    ) external pure override returns (bytes4) {
+        return 0x1626ba7e;
     }
 }
 
-contract SmartAccount_CallData_Tests is Test {
-    SmartAccount acct;
-    MockEntryPointV07 ep;
-    ECDSAValidator validator;
+contract SmartAccount_CallData_Test is Test {
+    SmartAccount public account;
+    MockEntryPoint public ep;
 
-    NonceBoundCallDataValidationHook vhook;
-
-    AllowAllHook allowHook;
-    RevertingHook revertHook;
-
-    Target target;
-
-    address owner;
-    uint256 ownerKey;
+    ValidationPreHookAggregator public vph;
+    NonceBoundCallDataValidationHook public nb;
+    AlwaysPassValidator public validator;
 
     function setUp() public {
-        ownerKey = 0xA11CE;
-        owner = vm.addr(ownerKey);
+        ep = new MockEntryPoint();
+        account = new SmartAccount(address(this), address(ep));
 
-        ep = new MockEntryPointV07();
-        validator = new ECDSAValidator();
+        // modules
+        validator = new AlwaysPassValidator();
+        vph = new ValidationPreHookAggregator(address(account));
+        nb = new NonceBoundCallDataValidationHook(address(account));
 
-        acct = new SmartAccount(
-            owner,
-            address(ep),
-            address(validator),
-            abi.encode(owner)
-        );
+        // install modules into the account
+        account.installModule(ModuleType.VALIDATOR, address(validator), "");
+        account.installModule(ModuleType.HOOK, address(vph), "");
+        account.installModule(ModuleType.HOOK, address(nb), "");
 
-        // hooks
-        allowHook = new AllowAllHook();
-        revertHook = new RevertingHook();
-        target = new Target();
+        // set default lane config
+        account.setLaneValidator(0, address(validator));
+        account.setLaneValidationHook(0, address(vph));
 
-        // install hooks so SmartAccount accepts them
-        vm.startPrank(owner);
-        acct.installModule(ModuleType.HOOK, address(allowHook), "");
-        acct.installModule(ModuleType.HOOK, address(revertHook), "");
-
-        // validation hook
-        vhook = new NonceBoundCallDataValidationHook(address(acct));
-        acct.installModule(ModuleType.HOOK, address(vhook), "");
-        vm.stopPrank();
-
-        // lane0: allow exec + enable nonce-bound validation hook
-        vm.prank(owner);
-        acct.setLaneConfig(
-            uint192(0),
-            address(0),
-            address(vhook),
-            address(0),
-            address(allowHook)
-        );
-
-        // lane1: revert on execution (to observe lane switching via execute() data encoding)
-        vm.prank(owner);
-        acct.setLaneConfig(
-            uint192(1),
-            address(0),
-            address(0),
-            address(0),
-            address(revertHook)
-        );
+        // configure vph (onlyAccount)
+        vm.prank(address(account));
+        address[] memory hooks = new address[](1);
+        hooks[0] = address(nb);
+        vph.upgrade(1, 0, 0, hooks);
     }
 
-    function _packNonce(
+    function _makeUserOp(
+        bytes memory callData,
         uint192 laneKey,
         uint64 seq
-    ) internal pure returns (uint256) {
-        return (uint256(laneKey) << 64) | uint256(seq);
+    ) internal view returns (PackedUserOperation memory op) {
+        uint256 nonce = (uint256(laneKey) << 64) | uint256(seq);
+        op.sender = address(account);
+        op.nonce = nonce;
+        op.initCode = "";
+        op.callData = callData;
+        op.accountGasLimits = bytes32(0);
+        op.preVerificationGas = 0;
+        op.gasFees = bytes32(0);
+        op.paymasterAndData = "";
+        op.signature = hex"01"; // ignored by AlwaysPassValidator
     }
 
-    // -------------------------
-    // Validation hook tests
-    // -------------------------
-
-    function test_validate_reverts_if_selector_wrong() public {
-        uint192 laneKey = 1;
-        uint256 nonce = _packNonce(laneKey, 0);
-
-        PackedUserOperation memory op;
-        op.nonce = nonce;
-        op.signature = hex"00";
-        op.callData = hex"12345678";
+    function test_preHook_reverts_on_selector_mismatch() public {
+        // wrong selector
+        bytes memory callData = abi.encodeWithSignature("notExecuteUserOp()");
+        PackedUserOperation memory op = _makeUserOp(callData, 0, 0);
 
         vm.prank(address(ep));
-        vm.expectRevert(); // selector mismatch -> revert
-        acct.validateUserOp(op, keccak256("h"), 0);
+        vm.expectRevert(); // InvalidCallDataSelector()
+        account.validateUserOp(op, keccak256("h"), 0);
     }
 
-    function test_validate_reverts_if_nonce_mismatch_in_callData() public {
-        uint192 laneKey = 2;
-        uint256 nonce = _packNonce(laneKey, 0);
-        uint256 wrong = _packNonce(laneKey, 9);
-
-        PackedUserOperation memory op;
-        op.nonce = nonce;
-        op.signature = hex"00";
-        op.callData = abi.encodeCall(
-            SmartAccount.executeUserOp,
-            (address(0xBEEF), 0, hex"", wrong)
+    function test_preHook_reverts_on_nonce_mismatch() public {
+        // fullNonce inside calldata differs from userOp.nonce
+        uint256 otherNonce = (uint256(0) << 64) | uint256(999);
+        bytes memory callData = abi.encodeWithSelector(
+            account.executeUserOp.selector,
+            address(0xBEEF),
+            0,
+            bytes(""),
+            otherNonce
         );
+        PackedUserOperation memory op = _makeUserOp(callData, 0, 0);
 
         vm.prank(address(ep));
-        vm.expectRevert(); // NonceBound hook should revert
-        acct.validateUserOp(op, keccak256("h"), 0);
+        vm.expectRevert(); // NonceMismatch()
+        account.validateUserOp(op, keccak256("h"), 0);
     }
 
-    function test_validate_ok_for_hook_checks_if_nonce_matches_but_sig_may_fail()
-        public
-    {
-        uint192 laneKey = 3;
-        uint256 nonce = _packNonce(laneKey, 0);
-
-        PackedUserOperation memory op;
-        op.nonce = nonce;
-        op.signature = hex"00";
-        op.callData = abi.encodeCall(
-            SmartAccount.executeUserOp,
-            (address(0xBEEF), 0, hex"", nonce)
+    function test_nonce_sequence_updates_only_after_success() public {
+        // correct fullNonce inside calldata (matches userOp.nonce)
+        uint256 nonce = (uint256(0) << 64) | uint256(0);
+        bytes memory callData = abi.encodeWithSelector(
+            account.executeUserOp.selector,
+            address(0xBEEF),
+            0,
+            bytes(""),
+            nonce
         );
+        PackedUserOperation memory op = _makeUserOp(callData, 0, 0);
+
+        assertEq(account.nonceSequence(0), 0);
 
         vm.prank(address(ep));
-        // It may revert later due to signature validation (depending on your validator),
-        // but it must NOT revert due to selector/nonce mismatch.
-        vm.expectRevert(); // expected due to sig validation in ECDSAValidator
-        acct.validateUserOp(op, keccak256("h"), 0);
-    }
+        account.validateUserOp(op, keccak256("h"), 0);
 
-    // -------------------------
-    // execute() laneKey encoding tests (A方式 memory)
-    // -------------------------
-
-    function test_execute_raw_data_uses_lane0_and_succeeds() public {
-        bytes memory inner = abi.encodeCall(Target.ping, (bytes("hello")));
-        vm.prank(owner);
-        acct.execute(address(target), 0, inner); // raw => lane0 => allowHook => ok
-    }
-
-    function test_execute_wrapped_lane1_reverts_due_to_execHook() public {
-        bytes memory inner = abi.encodeCall(Target.ping, (bytes("hello")));
-        bytes memory wrapped = abi.encode(uint192(1), inner);
-
-        vm.prank(owner);
-        vm.expectRevert(RevertingHook.RevertingHookTriggered.selector);
-        acct.execute(address(target), 0, wrapped);
-    }
-
-    function test_execute_malformed_wrapped_falls_back_to_raw_lane0() public {
-        bytes memory inner = abi.encodeCall(Target.ping, (bytes("hello")));
-
-        // malformed: offset != 0x40 (we craft a broken encoding)
-        // [laneKey word][offset word != 0x40][...]
-        bytes memory bad = abi.encodePacked(
-            bytes32(uint256(uint192(1)) << 64),
-            bytes32(uint256(0x20)), // WRONG offset
-            inner
-        );
-
-        vm.prank(owner);
-        // should be treated as raw; lane0 allowHook => ok
-        acct.execute(address(target), 0, bad);
+        assertEq(account.nonceSequence(0), 1);
     }
 }

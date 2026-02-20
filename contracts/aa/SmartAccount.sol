@@ -13,21 +13,27 @@ import {
     IHook,
     IModuleManager
 } from "./interfaces/ERC7579.sol";
-
 import {IValidationHook} from "./interfaces/IValidationHook.sol";
-import {LaneKeyLib} from "./libs/LaneKeyLib.sol";
 
 /// @notice ERC-4337 Smart Account scaffold (EntryPoint v0.7 / PackedUserOperation) with:
-/// - ERC-7579-ish module registry (validator/executor/hook)
-/// - laneKey-based LaneConfig (domain context)
-/// - Optional validation preHook (IValidationHook) per lane (recommend: ValidationPreHookAggregator)
-/// - Fixed execution hooks: pre+post via ONE IHook per lane (recommend: ExecutionHookAggregator)
+/// - ERC-7579 module registry (validator/executor/hook)
+/// - laneKey (uint192) -> LaneConfig selection
+/// - ValidationPreHookAggregator (IValidationHook) (optional per lane)
+/// - ExecutionHookAggregator (IHook) (optional per lane; recommended to be an aggregator)
 ///
-/// Manual execute() lane selection:
-/// - raw:        data = innerCallData             -> laneKey = 0
-/// - wrapped:    data = abi.encode(uint192, bytes)-> laneKey = provided
+/// Design notes:
+/// - laneKey selection is derived from userOp.nonce ([uint192 laneKey | uint64 seq]).
+/// - nonceSequence is updated ONLY after successful validation (preHook + validator).
+/// - manual execute() keeps the same signature; laneKey can be wrapped into `data`:
+///     data = abi.encode(uint192 laneKey, bytes innerCallData)
 contract SmartAccount is IAccount, IModuleManager {
-    using LaneKeyLib for uint192;
+    // -----------------------------
+    // Constants
+    // -----------------------------
+    // ERC-4337 constant: return value indicating signature failure (should not revert)
+    uint256 internal constant SIG_VALIDATION_FAILED = 1; // :contentReference[oaicite:1]{index=1}
+
+    uint192 internal constant DEFAULT_LANE = 0;
 
     // -----------------------------
     // Errors
@@ -38,24 +44,33 @@ contract SmartAccount is IAccount, IModuleManager {
     error ModuleNotInstalled();
     error InvalidModuleType();
     error ValidatorNotSet();
-    error ValidationFailed();
+    error InvalidNonce();
 
     // -----------------------------
     // Events
     // -----------------------------
     event OwnerChanged(address indexed oldOwner, address indexed newOwner);
     event EntryPointChanged(address indexed oldEP, address indexed newEP);
-    event DefaultValidatorChanged(
+
+    event LaneValidatorSet(
+        uint192 indexed laneKey,
         address indexed oldValidator,
         address indexed newValidator
     );
-
-    event LaneConfigSet(
+    event LaneValidationHookSet(
         uint192 indexed laneKey,
-        address validator,
-        address validationHook,
-        address executor,
-        address execHook
+        address indexed oldHook,
+        address indexed newHook
+    );
+    event LaneExecutorSet(
+        uint192 indexed laneKey,
+        address indexed oldExecutor,
+        address indexed newExecutor
+    );
+    event LaneExecHookSet(
+        uint192 indexed laneKey,
+        address indexed oldHook,
+        address indexed newHook
     );
 
     // -----------------------------
@@ -64,24 +79,21 @@ contract SmartAccount is IAccount, IModuleManager {
     address public owner;
     IEntryPoint public entryPoint;
 
-    // ERC-7579-ish modules by type
+    // module registry (ERC-7579-ish)
     mapping(uint256 => mapping(address => bool)) private _moduleInstalled;
     mapping(uint256 => address[]) private _modules;
 
-    // Default validator (fallback if lane config has no validator)
-    address public defaultValidator; // IValidator
-
-    // laneKey (uint192) => sequence (uint64)
-    mapping(uint192 => uint64) public nonceSequence;
-
     struct LaneConfig {
         address validator; // IValidator
-        address validationHook; // IValidationHook (registered under ModuleType.HOOK)
-        address executor; // IExecutor (optional)
-        address execHook; // IHook (ONE per lane; recommended: ExecutionHookAggregator)
+        address validationHook; // IValidationHook (OPTIONAL; stored as Hook module type)
+        address executor; // IExecutor (OPTIONAL)
+        address execHook; // IHook (OPTIONAL; recommended: ExecutionHookAggregator)
     }
 
     mapping(uint192 => LaneConfig) internal laneConfig;
+
+    // laneKey => sequence (uint64)
+    mapping(uint192 => uint64) public nonceSequence;
 
     // -----------------------------
     // Modifiers
@@ -96,23 +108,9 @@ contract SmartAccount is IAccount, IModuleManager {
         _;
     }
 
-    constructor(
-        address _owner,
-        address _entryPoint,
-        address _defaultValidator,
-        bytes memory validatorInitData
-    ) {
+    constructor(address _owner, address _entryPoint) {
         owner = _owner;
         entryPoint = IEntryPoint(_entryPoint);
-
-        if (_defaultValidator != address(0)) {
-            _installModuleInternal(
-                ModuleType.VALIDATOR,
-                _defaultValidator,
-                validatorInitData
-            );
-            defaultValidator = _defaultValidator;
-        }
     }
 
     // -----------------------------
@@ -128,52 +126,50 @@ contract SmartAccount is IAccount, IModuleManager {
         entryPoint = IEntryPoint(newEntryPoint);
     }
 
-    function setDefaultValidator(address validator) external onlyOwner {
-        if (!_moduleInstalled[ModuleType.VALIDATOR][validator])
-            revert ModuleNotInstalled();
-        emit DefaultValidatorChanged(defaultValidator, validator);
-        defaultValidator = validator;
-    }
-
-    /// @notice laneKeyごとの構成をまとめて設定（laneKey=0 を “デフォルトレーン” として運用する想定）
-    function setLaneConfig(
+    // lane wiring (domain config; laneKey structure is off-chain convention)
+    function setLaneValidator(
         uint192 laneKey,
-        address validator,
-        address validationHook,
-        address executor,
-        address execHook
+        address validator
     ) external onlyOwner {
         if (
             validator != address(0) &&
             !_moduleInstalled[ModuleType.VALIDATOR][validator]
         ) revert ModuleNotInstalled();
+        address old = laneConfig[laneKey].validator;
+        laneConfig[laneKey].validator = validator;
+        emit LaneValidatorSet(laneKey, old, validator);
+    }
+
+    function setLaneValidationHook(
+        uint192 laneKey,
+        address hook
+    ) external onlyOwner {
+        if (hook != address(0) && !_moduleInstalled[ModuleType.HOOK][hook])
+            revert ModuleNotInstalled();
+        address old = laneConfig[laneKey].validationHook;
+        laneConfig[laneKey].validationHook = hook;
+        emit LaneValidationHookSet(laneKey, old, hook);
+    }
+
+    function setLaneExecutor(
+        uint192 laneKey,
+        address executor
+    ) external onlyOwner {
         if (
             executor != address(0) &&
             !_moduleInstalled[ModuleType.EXECUTOR][executor]
         ) revert ModuleNotInstalled();
-        if (
-            validationHook != address(0) &&
-            !_moduleInstalled[ModuleType.HOOK][validationHook]
-        ) revert ModuleNotInstalled();
-        if (
-            execHook != address(0) &&
-            !_moduleInstalled[ModuleType.HOOK][execHook]
-        ) revert ModuleNotInstalled();
+        address old = laneConfig[laneKey].executor;
+        laneConfig[laneKey].executor = executor;
+        emit LaneExecutorSet(laneKey, old, executor);
+    }
 
-        laneConfig[laneKey] = LaneConfig({
-            validator: validator,
-            validationHook: validationHook,
-            executor: executor,
-            execHook: execHook
-        });
-
-        emit LaneConfigSet(
-            laneKey,
-            validator,
-            validationHook,
-            executor,
-            execHook
-        );
+    function setLaneExecHook(uint192 laneKey, address hook) external onlyOwner {
+        if (hook != address(0) && !_moduleInstalled[ModuleType.HOOK][hook])
+            revert ModuleNotInstalled();
+        address old = laneConfig[laneKey].execHook;
+        laneConfig[laneKey].execHook = hook;
+        emit LaneExecHookSet(laneKey, old, hook);
     }
 
     function getLaneConfig(
@@ -189,43 +185,43 @@ contract SmartAccount is IAccount, IModuleManager {
         PackedUserOperation calldata userOp,
         bytes32 userOpHash,
         uint256 missingAccountFunds
-    ) external override onlyEntryPoint returns (uint256) {
+    ) external override onlyEntryPoint returns (uint256 validationData) {
         (uint192 laneKey, uint64 seq) = _splitNonce(userOp.nonce);
 
-        // replay protection per lane
-        if (seq != nonceSequence[laneKey]) revert ValidationFailed();
-        nonceSequence[laneKey] = seq + 1;
+        // lane replay protection (do NOT bump nonce until *after* successful validation)
+        if (seq != nonceSequence[laneKey]) revert InvalidNonce();
 
         LaneConfig memory cfg = _laneOrDefault(laneKey);
 
-        // optional validation preHook (view-only checks)
         if (cfg.validationHook != address(0)) {
+            // runtimeData is optional in your design; pass empty for now
             IValidationHook(cfg.validationHook).preValidate(
                 userOp,
                 userOpHash,
                 userOp.signature,
-                abi.encode(laneKey)
+                bytes("")
             );
         }
 
-        // pick validator for this lane (fallback to defaultValidator)
-        address validator = cfg.validator;
-        if (validator == address(0)) validator = defaultValidator;
-        if (validator == address(0)) revert ValidatorNotSet();
+        if (cfg.validator == address(0)) revert ValidatorNotSet();
 
-        bool ok = IValidator(validator).validateUserOp(
-            userOpHash,
-            userOp.signature
+        // validator may touch state, so NOT view (ERC-7579 style) :contentReference[oaicite:2]{index=2}
+        validationData = IValidator(cfg.validator).validateUserOp(
+            userOp,
+            userOpHash
         );
-        if (!ok) revert ValidationFailed();
+
+        if (validationData != SIG_VALIDATION_FAILED) {
+            // successful validation -> bump nonce
+            nonceSequence[laneKey] = seq + 1;
+        }
 
         if (missingAccountFunds != 0) {
             (bool sent, ) = payable(msg.sender).call{
                 value: missingAccountFunds
             }("");
-            if (!sent) return 1;
+            if (!sent) return SIG_VALIDATION_FAILED;
         }
-        return 0;
     }
 
     // -----------------------------
@@ -233,7 +229,7 @@ contract SmartAccount is IAccount, IModuleManager {
     // -----------------------------
 
     /// @notice Called by EntryPoint during UserOp execution.
-    /// @dev fullNonce SHOULD be userOp.nonce (enforced by a validation hook like NonceBoundCallDataValidationHook)
+    /// @dev `fullNonce` SHOULD be userOp.nonce (enforced by a validation hook like NonceBoundCallDataValidationHook).
     function executeUserOp(
         address to,
         uint256 value,
@@ -241,17 +237,17 @@ contract SmartAccount is IAccount, IModuleManager {
         uint256 fullNonce
     ) external onlyEntryPoint returns (bytes memory ret) {
         (uint192 laneKey, ) = _splitNonce(fullNonce);
-        return _executeForLane(laneKey, msg.sender, to, value, data);
+        return _executeForLaneCalldata(laneKey, msg.sender, to, value, data);
     }
 
-    /// @notice Backward-compatible entry-point method that takes an explicit laneKey.
+    /// @notice Backward-compatible EntryPoint method that takes an explicit laneKey.
     function executeFromEntryPoint(
         uint192 laneKey,
         address to,
         uint256 value,
         bytes calldata data
     ) external onlyEntryPoint returns (bytes memory ret) {
-        return _executeForLane(laneKey, msg.sender, to, value, data);
+        return _executeForLaneCalldata(laneKey, msg.sender, to, value, data);
     }
 
     /// @notice Manual path: owner or installed executor module can call.
@@ -269,43 +265,39 @@ contract SmartAccount is IAccount, IModuleManager {
         return _executeForLaneMemory(laneKey, msg.sender, to, value, inner);
     }
 
-    function _executeForLane(
+    function _executeForLaneCalldata(
         uint192 laneKey,
         address caller,
         address to,
         uint256 value,
         bytes calldata data
     ) internal returns (bytes memory) {
-        // calldata版（EntryPoint経路）
         LaneConfig memory cfg = _laneOrDefault(laneKey);
 
-        if (cfg.executor != address(0)) {
-            if (!_moduleInstalled[ModuleType.EXECUTOR][cfg.executor])
-                revert ModuleNotInstalled();
-        }
-
+        bytes memory hookData;
         if (cfg.execHook != address(0)) {
-            IHook(cfg.execHook).preCheck(caller, to, value, data);
-        }
-
-        (bool success, bytes memory out) = to.call{value: value}(data);
-
-        if (cfg.execHook != address(0)) {
-            IHook(cfg.execHook).postCheck(
+            hookData = IHook(cfg.execHook).preCheck(
                 caller,
-                to,
                 value,
-                data,
-                success,
-                out
+                abi.encode(laneKey, to, value, data)
             );
         }
 
-        if (!success) {
-            assembly {
-                revert(add(out, 0x20), mload(out))
-            }
+        bytes memory out;
+        if (cfg.executor != address(0)) {
+            if (!_moduleInstalled[ModuleType.EXECUTOR][cfg.executor])
+                revert ModuleNotInstalled();
+            out = IExecutor(cfg.executor).execute(to, value, data);
+        } else {
+            (bool success, bytes memory retdata) = to.call{value: value}(data);
+            if (!success) _bubble(retdata);
+            out = retdata;
         }
+
+        if (cfg.execHook != address(0)) {
+            IHook(cfg.execHook).postCheck(hookData);
+        }
+
         return out;
     }
 
@@ -316,61 +308,82 @@ contract SmartAccount is IAccount, IModuleManager {
         uint256 value,
         bytes memory data
     ) internal returns (bytes memory) {
-        // memory版（manual execute 経路）
         LaneConfig memory cfg = _laneOrDefault(laneKey);
 
-        if (cfg.executor != address(0)) {
-            if (!_moduleInstalled[ModuleType.EXECUTOR][cfg.executor])
-                revert ModuleNotInstalled();
-        }
-
+        bytes memory hookData;
         if (cfg.execHook != address(0)) {
-            IHook(cfg.execHook).preCheck(caller, to, value, data);
-        }
-
-        (bool success, bytes memory out) = to.call{value: value}(data);
-
-        if (cfg.execHook != address(0)) {
-            IHook(cfg.execHook).postCheck(
+            hookData = IHook(cfg.execHook).preCheck(
                 caller,
-                to,
                 value,
-                data,
-                success,
-                out
+                abi.encode(laneKey, to, value, data)
             );
         }
 
-        if (!success) {
-            assembly {
-                revert(add(out, 0x20), mload(out))
-            }
+        bytes memory out;
+        if (cfg.executor != address(0)) {
+            if (!_moduleInstalled[ModuleType.EXECUTOR][cfg.executor])
+                revert ModuleNotInstalled();
+            out = IExecutor(cfg.executor).execute(to, value, data);
+        } else {
+            (bool success, bytes memory retdata) = to.call{value: value}(data);
+            if (!success) _bubble(retdata);
+            out = retdata;
         }
+
+        if (cfg.execHook != address(0)) {
+            IHook(cfg.execHook).postCheck(hookData);
+        }
+
         return out;
+    }
+
+    function _bubble(bytes memory retdata) internal pure {
+        assembly {
+            revert(add(retdata, 0x20), mload(retdata))
+        }
     }
 
     receive() external payable {}
 
     // -----------------------------
+    // EntryPoint deposit helpers
+    // -----------------------------
+    function addDeposit() external payable {
+        entryPoint.depositTo{value: msg.value}(address(this));
+    }
+
+    function withdrawDepositTo(
+        address payable to,
+        uint256 amount
+    ) external onlyOwner {
+        entryPoint.withdrawTo(to, amount);
+    }
+
+    function getDeposit() external view returns (uint256) {
+        return entryPoint.balanceOf(address(this));
+    }
+
+    // -----------------------------
     // ERC-7579-ish ModuleManager
     // -----------------------------
     function installModule(
-        uint256 moduleType,
+        uint256 moduleTypeId,
         address module,
-        bytes calldata data
+        bytes calldata initData
     ) external override onlyOwner {
-        _installModuleInternal(moduleType, module, data);
+        _installModuleInternal(moduleTypeId, module, initData);
     }
 
     function uninstallModule(
-        uint256 moduleType,
+        uint256 moduleTypeId,
         address module,
-        bytes calldata data
+        bytes calldata deInitData
     ) external override onlyOwner {
-        if (!_moduleInstalled[moduleType][module]) revert ModuleNotInstalled();
-        _moduleInstalled[moduleType][module] = false;
+        if (!_moduleInstalled[moduleTypeId][module])
+            revert ModuleNotInstalled();
+        _moduleInstalled[moduleTypeId][module] = false;
 
-        address[] storage arr = _modules[moduleType];
+        address[] storage arr = _modules[moduleTypeId];
         for (uint256 i = 0; i < arr.length; i++) {
             if (arr[i] == module) {
                 arr[i] = arr[arr.length - 1];
@@ -379,64 +392,55 @@ contract SmartAccount is IAccount, IModuleManager {
             }
         }
 
-        IModule(module).onUninstall(data);
-        emit ModuleUninstalled(moduleType, module);
-
-        if (moduleType == ModuleType.VALIDATOR && defaultValidator == module) {
-            emit DefaultValidatorChanged(defaultValidator, address(0));
-            defaultValidator = address(0);
-        }
+        IModule(module).onUninstall(deInitData);
+        emit ModuleUninstalled(moduleTypeId, module);
     }
 
     function isModuleInstalled(
-        uint256 moduleType,
-        address module
+        uint256 moduleTypeId,
+        address module,
+        bytes calldata /*additionalContext*/
     ) external view override returns (bool) {
-        return _moduleInstalled[moduleType][module];
+        return _moduleInstalled[moduleTypeId][module];
     }
 
     function getModules(
-        uint256 moduleType
+        uint256 moduleTypeId
     ) external view override returns (address[] memory) {
-        return _modules[moduleType];
+        return _modules[moduleTypeId];
     }
 
     function _installModuleInternal(
-        uint256 moduleType,
+        uint256 moduleTypeId,
         address module,
-        bytes memory data
+        bytes calldata initData
     ) internal {
-        if (moduleType < 1 || moduleType > 4) revert InvalidModuleType();
-        if (_moduleInstalled[moduleType][module])
+        if (moduleTypeId < 1 || moduleTypeId > 4) revert InvalidModuleType();
+        if (_moduleInstalled[moduleTypeId][module])
             revert ModuleAlreadyInstalled();
 
-        _moduleInstalled[moduleType][module] = true;
-        _modules[moduleType].push(module);
+        _moduleInstalled[moduleTypeId][module] = true;
+        _modules[moduleTypeId].push(module);
 
-        IModule(module).onInstall(data);
-        emit ModuleInstalled(moduleType, module);
+        IModule(module).onInstall(initData);
+        emit ModuleInstalled(moduleTypeId, module);
     }
 
     function _isExecutor(address maybeExecutor) internal view returns (bool) {
         return _moduleInstalled[ModuleType.EXECUTOR][maybeExecutor];
     }
 
-    // -----------------------------
-    // Internals
-    // -----------------------------
     function _laneOrDefault(
         uint192 laneKey
-    ) internal view returns (LaneConfig memory) {
-        LaneConfig memory c = laneConfig[laneKey];
-        if (
-            c.validator != address(0) ||
-            c.validationHook != address(0) ||
-            c.executor != address(0) ||
-            c.execHook != address(0)
-        ) {
-            return c;
-        }
-        return laneConfig[uint192(0)];
+    ) internal view returns (LaneConfig memory cfg) {
+        cfg = laneConfig[laneKey];
+
+        LaneConfig storage d = laneConfig[DEFAULT_LANE];
+        if (cfg.validator == address(0)) cfg.validator = d.validator;
+        if (cfg.validationHook == address(0))
+            cfg.validationHook = d.validationHook;
+        if (cfg.executor == address(0)) cfg.executor = d.executor;
+        if (cfg.execHook == address(0)) cfg.execHook = d.execHook;
     }
 
     function _splitNonce(
@@ -446,49 +450,24 @@ contract SmartAccount is IAccount, IModuleManager {
         seq = uint64(fullNonce);
     }
 
-    /// @dev A方式(memory): raw bytes OR abi.encode(uint192 laneKey, bytes innerCallData).
-    /// If not matching the expected encoding, treat as raw and laneKey=0.
+    /// @dev Wrap format:
+    ///   abi.encode(uint192 laneKey, bytes innerCallData)
+    /// If `data` is not in this format, returns (DEFAULT_LANE, data).
     function _decodeLaneDataOrDefaultMemory(
         bytes calldata data
     ) internal pure returns (uint192 laneKey, bytes memory inner) {
-        // If too short to be abi.encode(uint192, bytes) (which is 96 + len),
-        // treat as raw.
-        if (data.length < 96) {
-            return (uint192(0), bytes(data));
+        if (data.length < 64) {
+            return (DEFAULT_LANE, data);
         }
 
-        // Layout of abi.encode(uint192, bytes):
-        // [ 0x00..0x1f ] uint192 (in high bits) + padding
-        // [ 0x20..0x3f ] offset to bytes (=0x40)
-        // [ 0x40..0x5f ] bytes length
-        // [ 0x60..      ] bytes data
         uint256 offset;
-        uint256 len;
-        uint192 key;
-
         assembly {
-            // key stored in the high 192 bits of the word -> shift right 64 bits
-            key := shr(64, calldataload(data.offset))
             offset := calldataload(add(data.offset, 0x20))
         }
-
         if (offset != 0x40) {
-            return (uint192(0), bytes(data));
+            return (DEFAULT_LANE, data);
         }
 
-        assembly {
-            len := calldataload(add(data.offset, offset))
-        }
-
-        // total length must be exactly 0x60 + len
-        if (data.length != 0x60 + len) {
-            return (uint192(0), bytes(data));
-        }
-
-        inner = new bytes(len);
-        for (uint256 i = 0; i < len; i++) {
-            inner[i] = data[i + 0x60];
-        }
-        return (uint192(key), inner);
+        (laneKey, inner) = abi.decode(data, (uint192, bytes));
     }
 }
