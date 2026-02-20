@@ -17,7 +17,7 @@ If you are here for the R&D thesis (“movement of meaning”), see `README_RND.
 
 ## AA overview diagram
 
-![](./docs/intent_aa_sa_design_image.png)
+![](./images/self-analysis/intent_aa_sa_design_image.png)
 
 ---
 
@@ -45,7 +45,7 @@ As a result, **validator logic inevitably becomes domain-dependent**, and flexib
 
 This aligns with the spirit of **ERC-7579 (minimal modular account interfaces & module types for interoperability)**.
 Note: this repo may implement a subset / evolving subset of the interfaces as the experiment progresses.  
-(ERC-7579 defines minimal required interfaces/behavior for modular smart accounts and modules.)  
+(ERC-7579 defines minimal required interfaces/behavior for modular smart accounts and modules.)
 
 ---
 
@@ -115,7 +115,7 @@ Domain flexibility itself (allowlists, selector routing, spend limits, rate limi
 should live inside modules, not inside the SmartAccount core.
 
 (ERC-6900 standardizes modular smart contract accounts and account modules/plugins,
-emphasizing secure permissioning and interoperability.)  
+emphasizing secure permissioning and interoperability.)
 
 ---
 
@@ -187,10 +187,12 @@ It explores the hypothesis that:
 ## What I added: Versioned aggregators for operations & maintenance
 
 The original architecture already separates responsibilities:
+
 - SmartAccount: stable control-flow + deterministic phases
 - Modules: where design & development happens
 
 However, once you have many domain lanes (many `laneKey`s) and modules evolve frequently, operations can become chaotic:
+
 - “Which module set is active for this domain?”
 - “Can we safely roll forward / roll back?”
 - “How do we avoid accidental re-upgrades or partial upgrades?”
@@ -204,6 +206,7 @@ To address this, I applied **version management contracts** to the aggregator la
 - A version tag cannot be recorded twice (prevents accidental overwrite)
 
 This keeps the SmartAccount stable while making upgrades:
+
 - repeatable,
 - monitorable (events),
 - and reversible (explicit rollback path).
@@ -212,10 +215,10 @@ This keeps the SmartAccount stable while making upgrades:
 
 ## Discussion points (Ethereum Magicians)
 
-1) **Rollback / downgrade safety**
+1. **Rollback / downgrade safety**
    - Who is authorized to downgrade?
    - Should downgrade be time-locked / multisig / guardian-gated?
-2) **Monitoring**
+2. **Monitoring**
    - Should aggregators emit a module-set hash for offchain monitoring?
-3) **laneKey schema**
+3. **laneKey schema**
    - uint192 is compact and fast, but should laneKey be a typed-hash schema to prevent collisions?
