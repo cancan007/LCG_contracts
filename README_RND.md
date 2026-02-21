@@ -22,8 +22,14 @@ This repository implements a smart contract system designed to explore a fundame
 > **Future liquidity will manifest not as price, but as the movement of meaning.**  
 > Web3 can serve as an experimental field where this “movement of meaning” is observable as timestamped commitments on-chain.
 
-This DApp is not merely a token mechanism.  
-It is an experiment in modeling economic state as structured contextual commitments.
+**This DApp is not an answer — it’s a question.**  
+It proposes a _lens_ to ask: if meaning (and resonance with personal context) increasingly drives what spreads, lasts, and gets referenced, what would it look like to model that as onchain traces?
+
+Notes on interpretation:
+
+- The goal is **not** to define a universal “value metric”.
+- “Empathy depth” here is **not a strict measurement** — it’s a conceptual handle for “how much someone’s background context is understood / aligned with”.
+- The onchain artifacts are treated as **prompts and evidence for discussion**, while ranking/visibility and spam filtering can remain primarily an offchain/UI concern.
 
 ---
 
@@ -127,4 +133,5 @@ It is a sandbox to test:
 
 ## Status
 
+This repository should be read as a prototype / conceptual instrument: it aims to _provoke_ discussion about modern value, not to prescribe it.
 R&D scaffold. The economics/thesis is experimental by design.
