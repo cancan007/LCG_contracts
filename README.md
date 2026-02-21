@@ -43,6 +43,23 @@ In this model:
 
 > Economic state can be modeled as structured contextual commitments across space, time, and interpretive granularity.
 
+### Background: Empathy as Liquidity (Conceptual Context)
+
+This R&D is grounded in the following perspective:
+
+> Because modern imagination expands across time, space, and conceptual layers,  
+> liquidity increasingly binds to the _subjective resonance_ of meaning itself.  
+> And resonance (empathy) is often the act of showing understanding toward _another person’s background context_.
+
+In this DApp, a **context** is treated as that “background” artifact:
+a timestamped, shareable reference that can later be aggregated into broader interpretations (epochs, declarations, and commemorative minting).
+
+\*\*Related writing (c:contentReference[oaicite:6]{index=6}dium series: https://medium.com/@shoppy_humanity/list/91e6486a4aa7
+
+**Related diagrams (value / empathy / emotion maps):**
+
+- https://github.com/cancan007/society-conceptual-images
+
 ---
 
 ## Contextual Modeling Dimensions
