@@ -77,7 +77,12 @@ Value is abstracted from absolute numerical indicators into contextual trace.
 
 This project also explores a **modular AA architecture** for L3-oriented UX ecosystems.
 
-![current AA whole image](./images/self-analysis/intent_aa_sa_design_image.png)
+![AA whole](./images/self-analysis/intent_aa_sa_design_image.png)
+
+![laneKey x deterministic phases x versioned aggregators](./images/self-analysis/l3_inten_aa_DDD_development_methodology_image.png)
+
+> The second diagram focuses on the "development & ops methodology":
+> laneKey domain partitioning + protocol-fixed phases + versioned aggregator module sets.
 
 ## Why AA becomes blurry in L3-oriented UX
 

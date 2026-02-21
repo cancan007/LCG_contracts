@@ -17,7 +17,18 @@ If you are here for the R&D thesis (“movement of meaning”), see `README_RND.
 
 ## AA overview diagram
 
+**Figure 1: AA whole overview**
 ![](./images/self-analysis/intent_aa_sa_design_image.png)
+
+**Figure 2: laneKey × deterministic phases × versioned aggregators (DDD dev methodology)**
+![](./images/self-analysis/l3_inten_aa_DDD_development_methodology_image.png)
+
+> Figure 2 emphasizes:
+>
+> - laneKey as a DDD domain boundary (industry/service/function)
+> - protocol-fixed phase touchpoints (pre/post hooks)
+> - aggregators as the composition + ops surface
+> - version management as an auditable upgrade/rollback primitive
 
 ---
 
