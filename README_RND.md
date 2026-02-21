@@ -106,14 +106,6 @@ Value is abstracted from absolute numerical indicators into contextual trace.
 
 ---
 
-# Account Abstraction Architecture
-
-This project also explores a **modular AA architecture** for L3-oriented UX ecosystems.
-
-![current AA whole image](./images/self-analysis/intent_aa_sa_design_image.png)
-
----
-
 ## What this contract is (practical summary)
 
 `ContextObservatoryV0.sol` is an onchain scaffold where:
