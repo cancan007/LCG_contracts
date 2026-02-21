@@ -73,6 +73,9 @@ In other words, the **hook invocation timing is protocol-defined**, while domain
 
 ## laneKey as Domain Boundary (DDD-aligned)
 
+> **See Figure 2** (`l3_inten_aa_DDD_development_methodology_image`):  
+> laneKey is treated as a DDD boundary (industry/service/function). The SmartAccount stays stable, while per-lane behavior is expressed via a fixed set of module slots (validator / hooks / executor).
+
 Domain contexts are identified via `laneKey`.
 
 Each `laneKey` maps to a fixed set of module slots:
@@ -209,6 +212,9 @@ However, once you have many domain lanes (many `laneKey`s) and modules evolve fr
 - “How do we avoid accidental re-upgrades or partial upgrades?”
 
 To address this, I applied **version management contracts** to the aggregator layer:
+
+> **See Figure 2 (bottom-right)**:  
+> aggregators are the composition + ops surface. Module sets are version-tagged so upgrades/rollbacks become explicit, auditable on-chain operations—without rewiring the SmartAccount frequently.
 
 - Aggregators inherit `VersionedAggregatorBase`
 - A version tag is `uint96` (semantic `major.minor.patch` packed)

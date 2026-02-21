@@ -81,8 +81,11 @@ This project also explores a **modular AA architecture** for L3-oriented UX ecos
 
 ![laneKey x deterministic phases x versioned aggregators](./images/self-analysis/l3_inten_aa_DDD_development_methodology_image.png)
 
-> The second diagram focuses on the "development & ops methodology":
-> laneKey domain partitioning + protocol-fixed phases + versioned aggregator module sets.
+> **How to read Figure 2**:
+>
+> - **Top**: laneKey partitions intents into domain contexts (DDD boundary).
+> - **Middle**: SmartAccount is kept stable with protocol-fixed phase touchpoints.
+> - **Bottom**: aggregators act as the composition + ops surface, enabling **versioned** upgrades/rollbacks of child modules.
 
 ## Why AA becomes blurry in L3-oriented UX
 
