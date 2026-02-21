@@ -3,6 +3,7 @@
 This document is the **R&D-only** part of the repository.
 
 It is intentionally separated from the AA architecture so the discussion doesn’t mix:
+
 - AA / aggregators / versioning → `README_AA.md`
 - Context Observatory R&D → this document
 
@@ -27,6 +28,22 @@ It is an experiment in modeling economic state as structured contextual commitme
 ---
 
 ## Core Thesis
+
+### Background: Empathy as Liquidity (Conceptual Context)
+
+This R&D is grounded in the following perspective:
+
+> Because modern imagination expands across time, space, and conceptual layers,  
+> liquidity increasingly binds to the _subjective resonance_ of meaning itself.  
+> And resonance (empathy) is often the act of showing understanding toward _another person’s background context_.
+
+In this DApp, a **context** is treated as that “background” artifact:
+a timestamped, shareable reference that can later be aggregated into broader interpretations
+(epochs, declarations, and eventual commemorative minting).
+
+**Related writing (conceptual background):**
+
+- Medium series: https://medium.com/@shoppy_humanity/list/the-conceptual-model-might-be-basic-of-ai-safety-91e6486a4aa7
 
 ### Liquidity as the Movement of Meaning
 
@@ -94,12 +111,14 @@ This project also explores a **modular AA architecture** for L3-oriented UX ecos
 ## What this contract is (practical summary)
 
 `ContextObservatoryV0.sol` is an onchain scaffold where:
-- users can create *contexts* (hash + URI),
-- users commit structured *declarations* as a canonical `keccak256` hash,
+
+- users can create _contexts_ (hash + URI),
+- users commit structured _declarations_ as a canonical `keccak256` hash,
 - an `author` finalizes epochs by publishing a Merkle root,
 - users redeem by Merkle proof to mint an external `AuthorContextNFT`.
 
 It is a sandbox to test:
+
 - canonical commitment formats,
 - epoch-based aggregation/distribution,
 - and participation/noise-control knobs.

@@ -6,6 +6,12 @@ _A Modular Account Abstraction Experiment for Contextual Economics_
 
 ## Overview
 
+### Conceptual Background (R&D)
+
+- Context Observatory thesis & background writing:
+  https://medium.com/@shoppy_humanity/list/the-conceptual-model-might-be-basic-of-ai-safety-91e6486a4aa7
+- R&D doc: `README_RND.md`
+
 This repository implements a smart contract system designed to explore a fundamental hypothesis:
 
 > **Future liquidity will manifest not as price, but as the movement of meaning.**  
@@ -295,8 +301,3 @@ It explores the hypothesis that:
 1. **Rollback / downgrade safety**: should `downgrade()` exist? If yes, what governance model is sane (timelock / multisig / guardian)?
 2. **Monitoring**: should aggregators emit a **module-set hash** (or canonical event schema) for offchain monitoring?
 3. **laneKey schema**: raw `uint192` split fields vs typed-hash schema to avoid collisions across ecosystems?
-
-### Links
-
-- Repo: https://github.com/cancan007/LCG_contracts/tree/master
-- AA diagram: https://github.com/cancan007/LCG_contracts/raw/master/images/self-analysis/intent_aa_sa_design_image.png
