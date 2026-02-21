@@ -47,6 +47,17 @@ In this DApp, a **context** is treated as that “background” artifact:
 a timestamped, shareable reference that can later be aggregated into broader interpretations
 (epochs, declarations, and eventual commemorative minting).
 
+#### Key diagrams (conceptual lens)
+
+**Value as a 3-axis lens (Time / Space / Empathy depth)**  
+![Value 3-axis relationship](images/self-analysis/values/whole_3-axis-relationship-model.png)
+
+**Empathy: direct vs indirect background alignment**  
+![Direct vs Indirect Empathy](images/self-analysis/values/directly_indirectly_empathy-relationship-model.png)
+
+**Concrete examples for each axis**
+![Detail for each axis](images/self-analysis/values/detail-for-each_3-axis-model.png)
+
 **Related writing (conceptual background):**
 
 - Medium series: https://medium.com/@shoppy_humanity/list/the-conceptual-model-might-be-basic-of-ai-safety-91e6486a4aa7

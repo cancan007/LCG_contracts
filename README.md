@@ -6,6 +6,11 @@ _A Modular Account Abstraction Experiment for Contextual Economics_
 
 ## Overview
 
+### Docs (where to read)
+
+- **R&D / Context Observatory (thesis + DApp):** `README_RND.md`
+- **AA / Aggregators / laneKey architecture:** `README_AA.md` (if present)
+
 ### Conceptual Background (R&D)
 
 - Context Observatory thesis & background writing:
