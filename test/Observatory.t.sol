@@ -155,7 +155,10 @@ contract ObservatoryTest is Test {
     }
 
     /// Fuzz: with stake + epoch2, commit must revert unless memoHash == keccak256(memoURI)
-    function testFuzzEpoch2MemoHashMustMatch(bytes32 randomHash, string memory memoURI) public {
+    function testFuzzEpoch2MemoHashMustMatch(
+        bytes32 randomHash,
+        string memory memoURI
+    ) public {
         // keep memoURI reasonably sized to avoid excessive gas / memory in fuzz
         vm.assume(bytes(memoURI).length > 0);
         vm.assume(bytes(memoURI).length < 128);
@@ -187,6 +190,159 @@ contract ObservatoryTest is Test {
             randomHash,
             memoURI
         );
+    }
+
+    // ------------------------------------------------------------
+    // Fuzz: stake maturity (10min)
+    // ------------------------------------------------------------
+
+    function testFuzzStakeNotEffectiveBefore10min(
+        uint96 stakeAmount,
+        uint32 warpSeconds
+    ) public {
+        // stakeAmount: at least 0.01 ether, keep within sane bounds
+        vm.assume(stakeAmount >= 0.01 ether);
+        vm.assume(stakeAmount <= 5 ether);
+
+        // warpSeconds: strictly less than 10 minutes
+        vm.assume(warpSeconds < 600);
+
+        // epoch1 finalize => memoAlwaysPublic ON
+        obs.finalizeEpoch(EPOCH1, root, true);
+
+        // move to epoch2 and keep commit allowance tight so we can observe gating
+        obs.setActiveEpoch(EPOCH2);
+        obs.setPostPolicy(1, true); // base=1, stake gating on
+
+        // create context so sourceContextId=1 exists
+        obs.createContext(keccak256("ctx1"), "ipfs://cid-ctx-1");
+
+        // 1st commit succeeds without stake (allowed=1)
+        string memory memo1 = "ipfs://cid-memo-1";
+        bytes32 h1 = keccak256(bytes(memo1));
+
+        vm.prank(user1);
+        obs.commitDeclaration(
+            1,
+            0,
+            1,
+            ContextObservatoryV0.MeaningGranularity.SUMMARY,
+            ContextObservatoryV0.QuoteForm.QUOTE,
+            ContextObservatoryV0.TargetSpace.YOU,
+            ContextObservatoryV0.TargetTime.TIMELESS,
+            bytes32(uint256(uint160(address(this)))),
+            h1,
+            memo1
+        );
+
+        // deposit stake but do NOT wait 10min => stake not effective yet
+        vm.deal(user1, 10 ether);
+        vm.prank(user1);
+        obs.depositStake{value: uint256(stakeAmount)}();
+
+        vm.warp(block.timestamp + uint256(warpSeconds));
+
+        // 2nd commit should still revert because allowed remains 1 until maturity
+        string memory memo2 = "ipfs://cid-memo-2";
+        bytes32 h2 = keccak256(bytes(memo2));
+
+        vm.prank(user1);
+        vm.expectRevert(); // "post limit"
+        obs.commitDeclaration(
+            1,
+            0,
+            1,
+            ContextObservatoryV0.MeaningGranularity.SUMMARY,
+            ContextObservatoryV0.QuoteForm.QUOTE,
+            ContextObservatoryV0.TargetSpace.YOU,
+            ContextObservatoryV0.TargetTime.TIMELESS,
+            bytes32(uint256(uint160(address(this)))),
+            h2,
+            memo2
+        );
+    }
+
+    function testFuzzStakeBecomesEffectiveAfter10min(
+        uint96 stakeAmount
+    ) public {
+        vm.assume(stakeAmount >= 0.01 ether);
+        vm.assume(stakeAmount <= 5 ether);
+
+        obs.finalizeEpoch(EPOCH1, root, true);
+        obs.setActiveEpoch(EPOCH2);
+        obs.setPostPolicy(1, true);
+
+        obs.createContext(keccak256("ctx1"), "ipfs://cid-ctx-1");
+
+        // 1st commit (no stake needed)
+        string memory memo1 = "ipfs://cid-memo-1";
+        bytes32 h1 = keccak256(bytes(memo1));
+
+        vm.prank(user1);
+        obs.commitDeclaration(
+            1,
+            0,
+            1,
+            ContextObservatoryV0.MeaningGranularity.SUMMARY,
+            ContextObservatoryV0.QuoteForm.QUOTE,
+            ContextObservatoryV0.TargetSpace.YOU,
+            ContextObservatoryV0.TargetTime.TIMELESS,
+            bytes32(uint256(uint160(address(this)))),
+            h1,
+            memo1
+        );
+
+        // deposit stake then wait >=10min
+        vm.deal(user1, 10 ether);
+        vm.prank(user1);
+        obs.depositStake{value: uint256(stakeAmount)}();
+
+        vm.warp(block.timestamp + 600);
+
+        // 2nd commit should succeed now (extra>=1 for stake>=0.01)
+        string memory memo2 = "ipfs://cid-memo-2";
+        bytes32 h2 = keccak256(bytes(memo2));
+
+        vm.prank(user1);
+        obs.commitDeclaration(
+            1,
+            0,
+            1,
+            ContextObservatoryV0.MeaningGranularity.SUMMARY,
+            ContextObservatoryV0.QuoteForm.QUOTE,
+            ContextObservatoryV0.TargetSpace.YOU,
+            ContextObservatoryV0.TargetTime.TIMELESS,
+            bytes32(uint256(uint160(address(this)))),
+            h2,
+            memo2
+        );
+    }
+
+    // ------------------------------------------------------------
+    // Fuzz: createContext per-epoch rate limit
+    // ------------------------------------------------------------
+
+    function testFuzzCreateContextRespectsPerEpochLimit(uint32 limit) public {
+        // keep limit reasonable for fuzz
+        vm.assume(limit >= 1);
+        vm.assume(limit <= 25);
+
+        // set limit as author (this test contract is author)
+        obs.setContextCreateLimitPerEpoch(limit);
+
+        // activeEpochId is default 1 in your contract; this test doesn't depend on finalize.
+        for (uint32 i = 0; i < limit; i++) {
+            vm.prank(user1);
+            obs.createContext(
+                keccak256(abi.encodePacked("ctx", i)),
+                "ipfs://cid-ctx"
+            );
+        }
+
+        // (limit+1)th must revert
+        vm.prank(user1);
+        vm.expectRevert(); // "ctx rate"
+        obs.createContext(keccak256("ctx-over"), "ipfs://cid-ctx-over");
     }
 
     function _pairRoot(bytes32 a, bytes32 b) internal pure returns (bytes32) {

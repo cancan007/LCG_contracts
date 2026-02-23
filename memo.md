@@ -11,26 +11,70 @@
 
 1. stake(初めはなし。2epochからあり)
 
-- 現状、1ETH預け入れで1post追加される想定(L2ならそこまで重要じゃない)(withdrawして再度stakeしても復活しない)
+- 現状、**0.01 ETH** の stake により、`commitDeclaration` の許容量が **+1** 増える想定（`_allowedPosts = basePostLimit + effectiveStake/0.01 ether`）。
+- `effectiveStake` は **matured + (pendingがmatured時刻を超えていればpending)** で計算される。
+- 結論：stakeしてからcommitできるまでにタイムラグをおく(10min)。
+  - NOTE: `pending -> matured` への遷移は `_syncStake` を呼ぶタイミング（例：`commitDeclaration` / `withdrawStake` / `depositStake`）で行う。
+  - NOTE: 既に pending がある状態で追加 deposit しても、**既存pendingの成熟時刻は延長しない**（= stakeするたびに全て10min待たせない）。
+- `createContext` は stake gating の対象ではなく、epochごとの **rate limit**（`contextCreateLimitPerEpoch`）のみで制御する。
 
 2. createContext
 
-- イメージは参考文書を出すイメージ
+- イメージは参考文書を出すイメージ(ブランド的にはユーザー自身の背景を共有してほしい。)
+- 大量スパム防止のため、以下の関数をownerのみ設定できるようにした。(UI上でも表示されないようにhiddenする作業も行う。)
+  - `setContextCreateLimitPerEpoch`: epochごとのレートを設定。(0なら無制限)
+  - `setContextCreateUsage`: 実質的にepochごとにユーザーを凍結するため関数。(例：limit3なら第二引数に3を入れる)
+- 初期は以下のフォーマットでUI上では提出してもらう。(JSON)
+  - YOUR_LIEF
+  - MEANING_LABEL
+  - FOR_WHAT
+  - (途中からはMARKDOWNで自由形式にする時のキー) FREE_CONTENT
 
-3. post, declare(commitのこと),
+## Invariants
+
+**`contextCreateLimitPerEpoch=0`以外&`setContextCreateUsage未使用`**
+
+- 各epoch内で、各ユーザー１回以上は呼べる
+
+3. commitDeclaration
 
 - NOTE: createContextでuriが引数になっているが、これcontextIdだけでいい気がする(もし、自分の方でNFTの中身を保存する場所代を提供するのであればいいが、ipfs以外の既存文書をそのままだすケースでは対象外になってしまう)
   - 結論: そのままURI形式にする
 - 現状、context:commit=1:多
 - NOTE: memoHash（おそらく、他のcontextを読んだユーザーの感想？みたいな位置付けになる文のハッシュ）を見えるようにするかどうか
-  - 結論: finalize(epochId=1)後にmemoContentは常に公開されるようにする
+  - 結論: finalize(epochId=1)後にmemoContentは常に公開されるようにする(UI上からであれば、FREE_CONTENTキーで表現)
 
-4. finalize, setEnableRedeem(author側処理)
+## Invariants
+
+**`useStakeGating=false`の時**
+
+- 全てのユーザーが3回は最低呼べる。
+- 全てのユーザーは4回目以上は呼べない。
+
+**`useStakeGating=true`の時**
+
+- 呼ぶのが4回目以上の時、初回stake時から10min以降でないと呼べない。
+- 呼ぶのが4回目以上の時、stake量が0.01eth未満の場合呼べない。
+
+4. finalizeEpoch(author側処理)
 
 - NOTE: もしかすると、ここで一部epochの違いでredeemがうまくいかない人が出てくる可能性あり（もし、ユーザーごとのredeem権限にepochIDの紐付けをpostまたはcreateContext時にしていたら）(merkleRootで線型化する範囲は各々のユーザーのcommit?なら問題なし、全てなら問題が起きる可能性高い)
   - 結論: author依存のため心配なし
 
 5. redeem(status: claimed)
+
+- 初期UI上ではownerが中身に対して返信をしてからREDEEMできるようにする
+- UI上でownerからの返信を確認できるページも準備
+
+## Invariants
+
+**`finalizeEpoch未使用`**
+
+- 全てのユーザーは呼べない
+
+**`finalizeEpoch使用`&`epochs[epochId].redeemEnabled=true`あり**
+
+- commitDeclarationsを過去実行していれば、どこかのepochIdではredeemできる
 
 # AA cover area
 

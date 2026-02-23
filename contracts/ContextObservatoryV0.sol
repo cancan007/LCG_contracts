@@ -95,7 +95,18 @@ contract ContextObservatoryV0 {
     // Posting policy
     bool public useStakeGating = false;
     uint32 public basePostLimit = 3;
-    mapping(address => uint256) public stake;
+
+    // --- stake gating with maturity delay (A: stake becomes effective after a timelock) ---
+    uint256 public constant STAKE_MATURITY_DELAY = 10 minutes;
+
+    // matured stake counts toward posting capacity
+    mapping(address => uint256) public stakeMatured;
+
+    // pending stake does NOT count until it matures
+    mapping(address => uint256) public stakePending;
+
+    // when pending stake becomes effective
+    mapping(address => uint256) public stakePendingMaturesAt;
 
     // Epoch distribution
     struct Epoch {
@@ -113,6 +124,21 @@ contract ContextObservatoryV0 {
 
     // Belonged epochId of declarations (redeem is independent)
     uint256 public activeEpochId;
+
+    // --- createContext rate limit (per epoch, per address) ---
+    // 0 means "unlimited"
+    uint32 public contextCreateLimitPerEpoch = 0;
+
+    // epochId => user => contexts created in that epoch
+    mapping(uint256 => mapping(address => uint32))
+        public contextsCreatedInEpoch;
+
+    event ContextCreateLimitSet(uint32 newLimit);
+    event ContextCreateUsageSet(
+        uint256 indexed epochId,
+        address indexed user,
+        uint32 used
+    );
 
     mapping(uint256 => uint256) public spotlightContextByEpoch; // epochId => contextId
 
@@ -167,36 +193,114 @@ contract ContextObservatoryV0 {
         useStakeGating = _useStakeGating;
     }
 
+    function setContextCreateLimitPerEpoch(
+        uint32 newLimit
+    ) external onlyAuthor {
+        // newLimit = 0 => unlimited
+        contextCreateLimitPerEpoch = newLimit;
+        emit ContextCreateLimitSet(newLimit);
+    }
+
+    // (Optional but useful) author can adjust usage counters anytime
+    function setContextCreateUsage(
+        uint256 epochId,
+        address user,
+        uint32 used
+    ) external onlyAuthor {
+        contextsCreatedInEpoch[epochId][user] = used;
+        emit ContextCreateUsageSet(epochId, user, used);
+    }
+
     function setOpenAfterFirstEpoch(bool v) external onlyAuthor {
         openAfterFirstEpoch = v;
     }
 
-    // Optional stake to increase posting capacity
     function depositStake() external payable {
-        stake[msg.sender] += msg.value;
+        _syncStake(msg.sender);
+
+        // If there is no pending stake yet, start a new maturity window.
+        if (stakePending[msg.sender] == 0) {
+            stakePendingMaturesAt[msg.sender] =
+                block.timestamp + STAKE_MATURITY_DELAY;
+        }
+
+        // Add to pending; becomes effective at stakePendingMaturesAt[msg.sender]
+        stakePending[msg.sender] += msg.value;
     }
 
     function withdrawStake(uint256 amount) external {
-        require(stake[msg.sender] >= amount, "insufficient stake");
-        stake[msg.sender] -= amount;
+        // Sync stake to ensure matured/pending states are up-to-date before allowing withdrawal
+        _syncStake(msg.sender);
+
+        uint256 matured = stakeMatured[msg.sender];
+        uint256 pending = stakePending[msg.sender];
+
+        // pending may already be mature in time, but we still treat it as pending storage-wise.
+        // total withdrawable is matured + pending
+        require(matured + pending >= amount, "insufficient stake");
+
+        // Withdraw from pending first (doesn't affect quota anyway until matured)
+        if (pending >= amount) {
+            stakePending[msg.sender] = pending - amount;
+        } else {
+            stakePending[msg.sender] = 0;
+            stakeMatured[msg.sender] = matured - (amount - pending);
+        }
+
         (bool ok, ) = msg.sender.call{value: amount}("");
         require(ok, "withdraw failed");
     }
 
+    function _effectiveStake(address user) internal view returns (uint256) {
+        uint256 eff = stakeMatured[user];
+        if (block.timestamp >= stakePendingMaturesAt[user]) {
+            eff += stakePending[user];
+        }
+        return eff;
+    }
+
     function _allowedPosts(address user) internal view returns (uint32) {
         if (!useStakeGating) return basePostLimit;
-        uint32 extra = uint32(stake[user] / 0.01 ether);
+
+        // 0.01 ETH per 1 extra post (same as before, but only effective stake counts)
+        uint256 eff = _effectiveStake(user);
+        uint32 extra = uint32(eff / 0.01 ether);
+
         return basePostLimit + extra;
+    }
+
+    function _syncStake(address user) internal {
+        if (
+            stakePending[user] != 0 &&
+            block.timestamp >= stakePendingMaturesAt[user]
+        ) {
+            stakeMatured[user] += stakePending[user];
+            stakePending[user] = 0;
+            stakePendingMaturesAt[user] = 0;
+        }
     }
 
     function createContext(
         bytes32 contentHash,
         string calldata uri
     ) external returns (uint256 contextId) {
+        uint256 ep = activeEpochId;
+
+        // Rate limit: per epoch per address
+        uint32 limit = contextCreateLimitPerEpoch;
+        if (limit != 0) {
+            require(contextsCreatedInEpoch[ep][msg.sender] < limit, "ctx rate");
+        }
+
         contextId = nextContextId++;
         contextCreator[contextId] = msg.sender;
         contextContentHash[contextId] = contentHash;
         contextURI[contextId] = uri;
+
+        unchecked {
+            contextsCreatedInEpoch[ep][msg.sender] += 1;
+        }
+
         emit ContextCreated(contextId, msg.sender, contentHash, uri);
     }
 
@@ -232,6 +336,9 @@ contract ContextObservatoryV0 {
             if (targetSpace == TargetSpace.PARTICULAR)
                 revert("PARTICULAR disabled in AUTHOR_ONLY");
         }
+
+        // Sync stake to ensure posting capacity is up-to-date before checking limits and potentially granting spotlight bonus
+        _syncStake(msg.sender);
 
         declarationId = nextDeclarationId++;
 
@@ -274,7 +381,7 @@ contract ContextObservatoryV0 {
 
         if (
             useStakeGating &&
-            stake[msg.sender] > 0 &&
+            _effectiveStake(msg.sender) > 0 &&
             spotlight != 0 &&
             sourceContextId == spotlight &&
             !spotlightBonusClaimed[ep][msg.sender]

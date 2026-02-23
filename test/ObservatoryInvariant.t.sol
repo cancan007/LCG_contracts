@@ -32,6 +32,7 @@ contract ObservatoryInvariant is StdInvariant, Test {
 
         // create context so sourceContextId=1 exists
         obs.createContext(keccak256("ctx1"), "ipfs://cid-ctx-1");
+        obs.setContextCreateLimitPerEpoch(5);
 
         // Stake from this contract (since handler calls from itself, not from EOAs).
         // If your stake gating checks msg.sender stake, we should stake from handler address too;
@@ -55,5 +56,10 @@ contract ObservatoryInvariant is StdInvariant, Test {
     function invariant_redeem_requires_finalize() public view {
         // Redeem on non-finalized epoch must never succeed.
         assertFalse(handler.redeemWithoutFinalizeSucceeded());
+    }
+
+    function invariant_context_rate_limit_holds() public view {
+        // If createContext succeeds after exceeding per-epoch limit, that's a bug.
+        assertFalse(handler.contextLimitExceededSucceeded());
     }
 }
