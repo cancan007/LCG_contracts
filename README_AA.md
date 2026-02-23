@@ -228,6 +228,91 @@ This keeps the SmartAccount stable while making upgrades:
 - monitorable (events),
 - and reversible (explicit rollback path).
 
+## ContextObservatory (ERC-4337 Paymaster, owner-signed, dual execution)
+
+We sponsor gas for **ContextObservatory** operations via an **ERC-4337 v0.7 Paymaster**, and we require an **owner signature** so that third parties cannot burn a user’s sponsored balance by submitting arbitrary UserOps.
+
+### Sponsored actions (allowed selectors only)
+
+- `createContext(bytes32,string)`
+- `commitDeclaration(...)`
+- `redeem(uint256,uint256,string,string,bytes32[])`
+
+Both the **Paymaster** and the **Validator** enforce:
+
+- target contract == `ContextObservatoryV0`
+- inner selector is one of the three above
+- laneKey matches the action lane
+
+### laneKey naming (industry/service/process)
+
+We treat laneKey as a DDD boundary: `industry/service/process`.
+
+For this R&D:
+
+- industry: `"R&D"`
+- service: `"LCG"`
+- process:
+  - `"internal/createContext"`
+  - `"internal/commitDeclaration"`
+  - `"internal/redeem"`
+
+laneKey is encoded into the **top 192 bits** of the UserOp nonce:
+
+- `laneKey = uint192(userOp.nonce >> 64)`
+
+Deterministic derivation:
+
+- `id64(x) = uint64(bytes8(keccak256(bytes(x))))`
+- `laneKey = pack(id64(industry), id64(service), id64(process))`
+
+### Onchain components
+
+- `ContextObservatoryPaymaster`: holds per-account balances and pays gas
+- `ContextObservatoryLaneValidator`: one validator per action lane (signature + laneKey + selector + target)
+- `ContextObservatoryExecutor`: defense-in-depth executor (target + selector)
+
+### Dual execution path (both OK)
+
+UserOp outer call can be either:
+
+1. `executeFromEntryPoint(uint192 laneKey, address to, uint256 value, bytes innerCallData)`
+2. `executeUserOp(address to, uint256 value, bytes innerCallData, uint256 fullNonce)`
+
+For (2), laneKey is derived from `fullNonce >> 64`.  
+The validator checks **laneKey consistency**:
+
+- `uint192(fullNonce >> 64) == uint192(userOp.nonce >> 64)`
+
+### paymasterAndData format (owner-signed)
+
+We require owner signature in `paymasterAndData`:
+
+- `paymasterAndData = paymasterAddress || validUntil(uint48) || validAfter(uint48) || signature`
+
+Signature is produced by `SmartAccount.owner()` over the Paymaster’s request hash (defined in the Paymaster contract).
+This prevents third parties from submitting UserOps that spend a user’s sponsored balance.
+
+### Funding model
+
+Two balances exist:
+
+1. **EntryPoint deposit** (Paymaster must maintain):
+
+- `paymaster.addDepositToEntryPoint(){value: ...}`
+
+2. **Per-account sponsored balance** (gas budget held by paymaster):
+
+- `paymaster.depositFor(account){value: ...}`
+- charged upfront by `maxCost`, refunded in `postOp` based on actual cost
+
+### Deploy script toggle
+
+The deploy script can emit sample outer calldata for both paths:
+
+- `USE_EXECUTE_USEROP=true` → emit `executeUserOp(...)` outer calldata
+- default (`false`) → emit `executeFromEntryPoint(...)` outer calldata
+
 ---
 
 ## Discussion points (Ethereum Magicians)
