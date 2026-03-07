@@ -40,5 +40,6 @@ npx ts-node scripts/build-merkle.ts airdrop/epoch-1.json airdrop/epoch-1.proofs.
 ```
 
 The harness is `echidna/ContextObservatoryEchidnaHarness.sol` and checks:
+
 - Redeem cannot be claimed twice for the same leaf
 - Minted NFT stores the expected `metadataContentHash`

@@ -10,11 +10,17 @@ contract AllowAllHook is IHook {
     function onInstall(bytes calldata) external override {}
     function onUninstall(bytes calldata) external override {}
 
-    function isModuleType(uint256 moduleTypeId) external pure override returns (bool) {
+    function isModuleType(
+        uint256 moduleTypeId
+    ) external pure override returns (bool) {
         return moduleTypeId == ModuleType.HOOK;
     }
 
-    function preCheck(address, uint256, bytes calldata) external override returns (bytes memory) {
+    function preCheck(
+        address,
+        uint256,
+        bytes calldata
+    ) external override returns (bytes memory) {
         return bytes("");
     }
 

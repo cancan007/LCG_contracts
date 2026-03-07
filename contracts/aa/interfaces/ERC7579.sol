@@ -81,5 +81,7 @@ interface IModuleManager {
         bytes calldata additionalContext
     ) external view returns (bool);
 
-    function getModules(uint256 moduleTypeId) external view returns (address[] memory);
+    function getModules(
+        uint256 moduleTypeId
+    ) external view returns (address[] memory);
 }

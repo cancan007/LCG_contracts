@@ -9,8 +9,15 @@ pragma solidity ^0.8.20;
 ///
 /// You can reinterpret the 3 x uint64 slots however you want, as long as you keep it consistent.
 library LaneKeyLib {
-    function pack(uint64 industryId, uint64 appId, uint64 actionId) internal pure returns (uint192) {
-        return (uint192(industryId) << 128) | (uint192(appId) << 64) | uint192(actionId);
+    function pack(
+        uint64 industryId,
+        uint64 appId,
+        uint64 actionId
+    ) internal pure returns (uint192) {
+        return
+            (uint192(industryId) << 128) |
+            (uint192(appId) << 64) |
+            uint192(actionId);
     }
 
     function industry(uint192 laneKey) internal pure returns (uint64) {
