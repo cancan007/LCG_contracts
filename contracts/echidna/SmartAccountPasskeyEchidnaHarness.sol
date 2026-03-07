@@ -4,28 +4,15 @@ pragma solidity ^0.8.20;
 import {SmartAccount} from "../aa/SmartAccount.sol";
 import {ModuleType} from "../aa/interfaces/ERC7579.sol";
 import {PackedUserOperation} from "../aa/interfaces/PackedUserOperation.sol";
-
 import {PasskeyValidatorMock} from "../aa/mocks/PasskeyValidatorMock.sol";
 
-/// @notice Echidna harness to fuzz "Passkey-style" validation on SmartAccount.
-///
-/// This harness acts as EntryPoint (entryPoint = address(this)), so `validateUserOp`
-/// can be called directly.
-///
-/// Properties tested:
-/// - challenge must bind to `userOpHash` (=> includes callData, nonce, fees, etc.)
-/// - rpIdHash / credentialIdHash scoping
-/// - monotonically increasing signCount (authenticator replay resistance)
-/// - SmartAccount lane nonce sequencing behavior
 contract SmartAccountPasskeyEchidnaHarness {
     SmartAccount public account;
     PasskeyValidatorMock public passkey;
 
-    // Fixed installation params for fuzzing
     bytes32 public constant RP_ID_HASH = keccak256("example.com");
     bytes32 public constant CRED_HASH = keccak256("credential-id");
 
-    // Last observed values
     uint256 public lastValidationData;
     uint192 public lastLaneKey;
     uint64 public lastSeqBefore;
@@ -36,17 +23,11 @@ contract SmartAccountPasskeyEchidnaHarness {
         account = new SmartAccount(address(this), address(this));
         passkey = new PasskeyValidatorMock();
 
-        account.installModule(
-            ModuleType.VALIDATOR,
-            address(passkey),
-            abi.encode(RP_ID_HASH, CRED_HASH)
-        );
-
-        // Default lane (0) uses passkey validator
+        account.setPasskeyCredential(RP_ID_HASH, 1, 1, false, CRED_HASH);
+        account.installModule(ModuleType.VALIDATOR, address(passkey), "");
         account.setLaneValidator(0, address(passkey));
     }
 
-    // EntryPoint-like userOpHash (copied from MockEntryPointV07)
     function getUserOpHash(
         PackedUserOperation memory userOp
     ) public view returns (bytes32) {
@@ -67,8 +48,6 @@ contract SmartAccountPasskeyEchidnaHarness {
             );
     }
 
-    /// @dev Echidna action: attempt validation.
-    /// We always use the current lane sequence to avoid InvalidNonce revert.
     function act_validate(
         bytes calldata callData,
         uint192 laneKey,
@@ -107,33 +86,23 @@ contract SmartAccountPasskeyEchidnaHarness {
         hasObservation = true;
     }
 
-    // -----------------------------
-    // Echidna properties
-    // -----------------------------
-
     function echidna_owner_is_harness() external view returns (bool) {
         return account.owner() == address(this);
     }
 
-    /// @dev If validation succeeded (vd==0), then nonceSequence must have incremented.
     function echidna_nonce_increments_on_success()
         external
         view
         returns (bool)
     {
         if (!hasObservation) return true;
-        if (lastValidationData == 0) {
-            return lastSeqAfter == lastSeqBefore + 1;
-        }
+        if (lastValidationData == 0) return lastSeqAfter == lastSeqBefore + 1;
         return true;
     }
 
-    /// @dev If validation failed (vd==1), nonceSequence must not change.
     function echidna_nonce_stable_on_failure() external view returns (bool) {
         if (!hasObservation) return true;
-        if (lastValidationData == 1) {
-            return lastSeqAfter == lastSeqBefore;
-        }
+        if (lastValidationData == 1) return lastSeqAfter == lastSeqBefore;
         return true;
     }
 }

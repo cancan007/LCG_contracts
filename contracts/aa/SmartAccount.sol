@@ -15,6 +15,19 @@ import {
 } from "./interfaces/ERC7579.sol";
 import {IValidationHook} from "./interfaces/IValidationHook.sol";
 
+interface IPasskeyCredentialStore {
+    function getPasskeyCredential()
+        external
+        view
+        returns (
+            bytes32 rpIdHash,
+            uint256 pubKeyX,
+            uint256 pubKeyY,
+            bool requireUV,
+            bytes32 credentialIdHashOpt
+        );
+}
+
 /// @notice ERC-4337 Smart Account scaffold (EntryPoint v0.7 / PackedUserOperation) with:
 /// - ERC-7579 module registry (validator/executor/hook)
 /// - laneKey (uint192) -> LaneConfig selection
@@ -95,6 +108,25 @@ contract SmartAccount is IAccount, IModuleManager {
     // laneKey => sequence (uint64)
     mapping(uint192 => uint64) public nonceSequence;
 
+    struct PasskeyCredential {
+        bytes32 rpIdHash;
+        uint256 pubKeyX;
+        uint256 pubKeyY;
+        bool requireUV;
+        bytes32 credentialIdHashOpt;
+    }
+
+    PasskeyCredential internal _passkeyCredential;
+
+    event PasskeyCredentialSet(
+        bytes32 indexed rpIdHash,
+        uint256 pubKeyX,
+        uint256 pubKeyY,
+        bool requireUV,
+        bytes32 credentialIdHashOpt
+    );
+    event PasskeyCredentialCleared();
+
     // -----------------------------
     // Modifiers
     // -----------------------------
@@ -124,6 +156,56 @@ contract SmartAccount is IAccount, IModuleManager {
     function setEntryPoint(address newEntryPoint) external onlyOwner {
         emit EntryPointChanged(address(entryPoint), newEntryPoint);
         entryPoint = IEntryPoint(newEntryPoint);
+    }
+
+    function setPasskeyCredential(
+        bytes32 rpIdHash,
+        uint256 pubKeyX,
+        uint256 pubKeyY,
+        bool requireUV,
+        bytes32 credentialIdHashOpt
+    ) external onlyOwner {
+        _passkeyCredential = PasskeyCredential({
+            rpIdHash: rpIdHash,
+            pubKeyX: pubKeyX,
+            pubKeyY: pubKeyY,
+            requireUV: requireUV,
+            credentialIdHashOpt: credentialIdHashOpt
+        });
+
+        emit PasskeyCredentialSet(
+            rpIdHash,
+            pubKeyX,
+            pubKeyY,
+            requireUV,
+            credentialIdHashOpt
+        );
+    }
+
+    function clearPasskeyCredential() external onlyOwner {
+        delete _passkeyCredential;
+        emit PasskeyCredentialCleared();
+    }
+
+    function getPasskeyCredential()
+        external
+        view
+        returns (
+            bytes32 rpIdHash,
+            uint256 pubKeyX,
+            uint256 pubKeyY,
+            bool requireUV,
+            bytes32 credentialIdHashOpt
+        )
+    {
+        PasskeyCredential memory c = _passkeyCredential;
+        return (
+            c.rpIdHash,
+            c.pubKeyX,
+            c.pubKeyY,
+            c.requireUV,
+            c.credentialIdHashOpt
+        );
     }
 
     // lane wiring (domain config; laneKey structure is off-chain convention)

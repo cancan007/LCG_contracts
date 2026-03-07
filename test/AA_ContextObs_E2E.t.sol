@@ -7,6 +7,7 @@ import {MockEntryPointV07} from "../contracts/aa/mocks/MockEntryPointV07.sol";
 import {SmartAccount} from "../contracts/aa/SmartAccount.sol";
 import {PackedUserOperation} from "../contracts/aa/interfaces/PackedUserOperation.sol";
 import {PackedUserOperationLib} from "../contracts/aa/interfaces/PackedUserOperation.sol";
+import {ModuleType} from "../contracts/aa/interfaces/ERC7579.sol";
 
 import {LaneKeyNaming} from "../contracts/aa/libs/LaneKeyNaming.sol";
 import {ECDSA} from "../contracts/aa/libs/ECDSA.sol";
@@ -14,15 +15,10 @@ import {ECDSA} from "../contracts/aa/libs/ECDSA.sol";
 import {ContextObservatoryV0} from "../contracts/ContextObservatoryV0.sol";
 import {ContextObservatoryPaymaster} from "../contracts/aa/modules/contextobs/ContextObservatoryPaymaster.sol";
 import {ContextObservatoryLaneValidator} from "../contracts/aa/modules/contextobs/ContextObservatoryLaneValidator.sol";
-import {ContextObservatoryExecutor} from "../contracts/aa/modules/contextobs/ContextObservatoryExecutor.sol";
+import {ValidatorAggregator} from "../contracts/aa/modules/ValidatorAggregator.sol";
+import {PasskeyValidatorMock} from "../contracts/aa/mocks/PasskeyValidatorMock.sol";
 import {IPaymasterV07} from "../contracts/aa/interfaces/IPaymasterV07.sol";
 
-/// @notice E2E-ish tests without a full EntryPoint.handleOps:
-/// We impersonate EntryPoint (MockEntryPointV07) and call:
-/// 1) Paymaster.validatePaymasterUserOp
-/// 2) SmartAccount.validateUserOp
-/// 3) SmartAccount.executeFromEntryPoint / executeUserOp
-/// 4) Paymaster.postOp
 contract AA_ContextObs_E2E is Test {
     using ECDSA for bytes32;
     using PackedUserOperationLib for PackedUserOperation;
@@ -30,13 +26,19 @@ contract AA_ContextObs_E2E is Test {
     MockEntryPointV07 internal ep;
     SmartAccount internal account;
     ContextObservatoryV0 internal obs;
-
     ContextObservatoryPaymaster internal paymaster;
+
+    PasskeyValidatorMock internal passkey;
+    ValidatorAggregator internal aggCreate;
+    ValidatorAggregator internal aggCommit;
+    ValidatorAggregator internal aggRedeem;
 
     uint256 internal constant OWNER_PK = 0xA11CE;
     address internal owner;
 
-    // lane naming
+    bytes32 internal constant RP_ID_HASH = keccak256("example.com");
+    bytes32 internal constant CRED_HASH = keccak256("credential-id");
+
     string internal constant INDUSTRY = "R&D";
     string internal constant SERVICE = "LCG";
 
@@ -46,7 +48,6 @@ contract AA_ContextObs_E2E is Test {
 
     bytes4 internal constant SEL_CREATE =
         bytes4(keccak256("createContext(bytes32,string)"));
-    // NOTE: must match your contract signature exactly
     bytes4 internal constant SEL_COMMIT =
         bytes4(
             keccak256(
@@ -60,10 +61,10 @@ contract AA_ContextObs_E2E is Test {
         owner = vm.addr(OWNER_PK);
 
         ep = new MockEntryPointV07();
-        obs = new ContextObservatoryV0(address(this)); // author = test contract
+        obs = new ContextObservatoryV0(address(this));
         account = new SmartAccount(owner, address(ep));
+        passkey = new PasskeyValidatorMock();
 
-        // derive lanes (industry/service/process)
         laneCreate = LaneKeyNaming.laneKey(
             INDUSTRY,
             SERVICE,
@@ -87,39 +88,49 @@ contract AA_ContextObs_E2E is Test {
             SERVICE
         );
 
-        // Deploy per-lane validator+executor and install into SmartAccount
-        _installLane(laneCreate, SEL_CREATE);
-        _installLane(laneCommit, SEL_COMMIT);
-        _installLane(laneRedeem, SEL_REDEEM);
+        vm.startPrank(owner);
+        account.setPasskeyCredential(
+            RP_ID_HASH,
+            uint256(CRED_HASH),
+            1,
+            false,
+            CRED_HASH
+        );
+        account.installModule(ModuleType.VALIDATOR, address(passkey), "");
+        vm.stopPrank();
 
-        // fund paymaster balance for this account (sponsored balance)
+        aggCreate = _installLane(laneCreate, SEL_CREATE);
+        aggCommit = _installLane(laneCommit, SEL_COMMIT);
+        aggRedeem = _installLane(laneRedeem, SEL_REDEEM);
+
         vm.deal(address(this), 10 ether);
-        paymaster.depositFor{value: 1 ether}(address(account)); // user gas budget in paymaster
-
-        // Fund EntryPoint deposit (mock has bookkeeping only, but paymaster enforces msg.sender == entryPoint)
-        // This call exists on paymaster for real EP integration; for mock it's fine to call.
+        paymaster.depositFor{value: 1 ether}(address(account));
         paymaster.addDepositToEntryPoint{value: 1 ether}();
     }
 
-    function _installLane(uint192 laneKey, bytes4 sel) internal {
-        ContextObservatoryLaneValidator v = new ContextObservatoryLaneValidator();
-        ContextObservatoryExecutor e = new ContextObservatoryExecutor();
+    function _installLane(
+        uint192 laneKey,
+        bytes4 sel
+    ) internal returns (ValidatorAggregator agg) {
+        ContextObservatoryLaneValidator laneValidator = new ContextObservatoryLaneValidator(
+                address(obs),
+                laneKey,
+                sel
+            );
+        agg = new ValidatorAggregator(owner);
 
         vm.startPrank(owner);
-        account.installModule(
-            1,
-            address(v),
-            abi.encode(address(obs), laneKey, sel)
-        ); // ModuleType.VALIDATOR == 1
-        account.installModule(2, address(e), abi.encode(address(obs), sel)); // ModuleType.EXECUTOR  == 2
-        account.setLaneValidator(laneKey, address(v));
-        account.setLaneExecutor(laneKey, address(e));
+        account.installModule(ModuleType.VALIDATOR, address(laneValidator), "");
+        account.installModule(ModuleType.VALIDATOR, address(agg), "");
+
+        address[] memory validators = new address[](2);
+        validators[0] = address(passkey);
+        validators[1] = address(laneValidator);
+        agg.upgrade(1, 0, 0, validators);
+
+        account.setLaneValidator(laneKey, address(agg));
         vm.stopPrank();
     }
-
-    // -------------------------
-    // Helpers to build UserOps
-    // -------------------------
 
     function _nonce(
         uint192 laneKey,
@@ -167,17 +178,13 @@ contract AA_ContextObs_E2E is Test {
     function _fillGasFields(
         PackedUserOperation memory op
     ) internal pure returns (PackedUserOperation memory) {
-        // Keep these small but non-zero.
         uint256 callGas = 200_000;
         uint256 verifGas = 400_000;
         op.accountGasLimits = bytes32((verifGas << 128) | callGas);
-
         op.preVerificationGas = 50_000;
-
         uint256 maxFee = 1 gwei;
         uint256 maxPrio = 1 gwei;
         op.gasFees = bytes32((maxPrio << 128) | maxFee);
-
         return op;
     }
 
@@ -186,7 +193,6 @@ contract AA_ContextObs_E2E is Test {
         uint48 validUntil,
         uint48 validAfter
     ) internal view returns (bytes memory) {
-        // build paymasterAndData = paymaster || validUntil || validAfter || sig
         bytes32 reqHash = paymaster.getPaymasterRequestHash(
             op,
             validUntil,
@@ -194,15 +200,15 @@ contract AA_ContextObs_E2E is Test {
         );
         bytes32 digest = reqHash.toEthSignedMessageHash();
         bytes memory sig = _sign(digest, OWNER_PK);
-
         return
             abi.encodePacked(address(paymaster), validUntil, validAfter, sig);
     }
 
     function _accountSig(
-        bytes32 userOpHash
+        bytes32 userOpHash,
+        uint32 signCount
     ) internal pure returns (bytes memory) {
-        return _sign(userOpHash.toEthSignedMessageHash(), OWNER_PK);
+        return abi.encode(userOpHash, RP_ID_HASH, CRED_HASH, signCount);
     }
 
     function _userOpHash(
@@ -211,11 +217,6 @@ contract AA_ContextObs_E2E is Test {
         return ep.getUserOpHash(op);
     }
 
-    // -------------------------
-    // Tests
-    // -------------------------
-
-    /// 1) Success path using executeFromEntryPoint + owner-signed paymasterAndData
     function test_E2E_success_executeFromEntryPoint() public {
         bytes memory inner = abi.encodeWithSignature(
             "createContext(bytes32,string)",
@@ -228,18 +229,17 @@ contract AA_ContextObs_E2E is Test {
         op.nonce = _nonce(laneCreate, 0);
         op.initCode = "";
         op.callData = _buildOuterExecuteFrom(laneCreate, inner);
-        op.signature = ""; // filled later
-        op.paymasterAndData = ""; // filled later
+        op.signature = "";
+        op.paymasterAndData = "";
         op = _fillGasFields(op);
 
         bytes32 uoh = _userOpHash(op);
-        op.signature = _accountSig(uoh);
+        op.signature = _accountSig(uoh, 1);
 
         uint48 validUntil = uint48(block.timestamp + 3600);
         uint48 validAfter = uint48(block.timestamp);
         op.paymasterAndData = _paymasterAndData(op, validUntil, validAfter);
 
-        // 4337-ish flow (impersonate EntryPoint)
         vm.startPrank(address(ep));
         (bytes memory ctx, ) = paymaster.validatePaymasterUserOp(
             op,
@@ -248,23 +248,17 @@ contract AA_ContextObs_E2E is Test {
         );
         uint256 vd = account.validateUserOp(op, uoh, 0);
         assertEq(vd, 0);
-
-        // execute
         account.executeFromEntryPoint(laneCreate, address(obs), 0, inner);
-
-        // postOp refund simulation (use smaller actual cost than reserved)
         paymaster.postOp(IPaymasterV07.PostOpMode.opSucceeded, ctx, 0.01 ether);
         vm.stopPrank();
     }
 
-    /// 2) Success path using executeUserOp + owner-signed paymasterAndData
     function test_E2E_success_executeUserOp() public {
         bytes memory inner = abi.encodeWithSignature(
             "createContext(bytes32,string)",
             keccak256("ctx2"),
             "ipfs://cid2"
         );
-
         uint256 fullNonce = _nonce(laneCreate, 0);
 
         PackedUserOperation memory op;
@@ -272,12 +266,12 @@ contract AA_ContextObs_E2E is Test {
         op.nonce = fullNonce;
         op.initCode = "";
         op.callData = _buildOuterExecuteUserOp(fullNonce, inner);
-        op.signature = ""; // filled later
-        op.paymasterAndData = ""; // filled later
+        op.signature = "";
+        op.paymasterAndData = "";
         op = _fillGasFields(op);
 
         bytes32 uoh = _userOpHash(op);
-        op.signature = _accountSig(uoh);
+        op.signature = _accountSig(uoh, 1);
 
         uint48 validUntil = uint48(block.timestamp + 3600);
         uint48 validAfter = uint48(block.timestamp);
@@ -291,14 +285,11 @@ contract AA_ContextObs_E2E is Test {
         );
         uint256 vd = account.validateUserOp(op, uoh, 0);
         assertEq(vd, 0);
-
         account.executeUserOp(address(obs), 0, inner, fullNonce);
-
         paymaster.postOp(IPaymasterV07.PostOpMode.opSucceeded, ctx, 0.01 ether);
         vm.stopPrank();
     }
 
-    /// 3) Reject: missing paymaster signature (third party cannot burn balance)
     function test_E2E_revert_missing_paymaster_sig() public {
         bytes memory inner = abi.encodeWithSignature(
             "createContext(bytes32,string)",
@@ -314,9 +305,8 @@ contract AA_ContextObs_E2E is Test {
         op = _fillGasFields(op);
 
         bytes32 uoh = _userOpHash(op);
-        op.signature = _accountSig(uoh);
+        op.signature = _accountSig(uoh, 1);
 
-        // paymasterAndData WITHOUT signature (just address + validity)
         uint48 validUntil = uint48(block.timestamp + 3600);
         uint48 validAfter = uint48(block.timestamp);
         op.paymasterAndData = abi.encodePacked(
@@ -326,13 +316,11 @@ contract AA_ContextObs_E2E is Test {
         );
 
         vm.prank(address(ep));
-        vm.expectRevert(); // BadSignature() / parse fail depending on implementation
+        vm.expectRevert();
         paymaster.validatePaymasterUserOp(op, uoh, 0.02 ether);
     }
 
-    /// 4) Reject: selector mismatch (attempt to call non-allowed function)
     function test_E2E_revert_selector_mismatch() public {
-        // inner calldata with WRONG selector (e.g., depositStake() does not exist on observatory)
         bytes memory inner = abi.encodeWithSignature("depositStake()");
 
         PackedUserOperation memory op;
@@ -343,28 +331,22 @@ contract AA_ContextObs_E2E is Test {
         op = _fillGasFields(op);
 
         bytes32 uoh = _userOpHash(op);
-        op.signature = _accountSig(uoh);
+        op.signature = _accountSig(uoh, 1);
 
         uint48 validUntil = uint48(block.timestamp + 3600);
         uint48 validAfter = uint48(block.timestamp);
         op.paymasterAndData = _paymasterAndData(op, validUntil, validAfter);
 
         vm.startPrank(address(ep));
-        // Paymaster should reject because selector is not one of {create, commit, redeem}
         vm.expectRevert();
         paymaster.validatePaymasterUserOp(op, uoh, 0.02 ether);
 
-        // Even if paymaster were bypassed, validator must reject.
-        // Some implementations revert (e.g., NotAllowedCall), others return SIG_VALIDATION_FAILED.
         try account.validateUserOp(op, uoh, 0) returns (uint256 vd) {
             assertTrue(vd != 0);
-        } catch {
-            // ok (revert is also a valid rejection)
-        }
+        } catch {}
         vm.stopPrank();
     }
 
-    /// 5) Reject: laneKey mismatch between userOp.nonce (top 192 bits) and executeUserOp(fullNonce)
     function test_E2E_revert_laneKey_mismatch_executeUserOp() public {
         bytes memory inner = abi.encodeWithSignature(
             "createContext(bytes32,string)",
@@ -372,10 +354,7 @@ contract AA_ContextObs_E2E is Test {
             "ipfs://cid-lane-mismatch"
         );
 
-        // userOp.nonce carries laneCreate
         uint256 opNonce = _nonce(laneCreate, 0);
-
-        // fullNonce carries a DIFFERENT lane (use laneCommit)
         uint256 fullNonceBad = _nonce(laneCommit, 0);
 
         PackedUserOperation memory op;
@@ -383,29 +362,24 @@ contract AA_ContextObs_E2E is Test {
         op.nonce = opNonce;
         op.initCode = "";
         op.callData = _buildOuterExecuteUserOp(fullNonceBad, inner);
-        op.signature = ""; // filled later
-        op.paymasterAndData = ""; // filled later
+        op.signature = "";
+        op.paymasterAndData = "";
         op = _fillGasFields(op);
 
         bytes32 uoh = _userOpHash(op);
-        op.signature = _accountSig(uoh);
+        op.signature = _accountSig(uoh, 1);
 
         uint48 validUntil = uint48(block.timestamp + 3600);
         uint48 validAfter = uint48(block.timestamp);
         op.paymasterAndData = _paymasterAndData(op, validUntil, validAfter);
 
         vm.startPrank(address(ep));
-        // Paymaster should reject because laneKey extracted from fullNonce differs from laneKey in userOp.nonce (or not in allowlist)
         vm.expectRevert();
         paymaster.validatePaymasterUserOp(op, uoh, 0.02 ether);
 
-        // Validator should also fail (either revert or return SIG_VALIDATION_FAILED)
-        // We accept either behavior; if it doesn't revert, it must return non-zero.
         try account.validateUserOp(op, uoh, 0) returns (uint256 vd) {
             assertTrue(vd != 0);
-        } catch {
-            // ok
-        }
+        } catch {}
         vm.stopPrank();
     }
 }

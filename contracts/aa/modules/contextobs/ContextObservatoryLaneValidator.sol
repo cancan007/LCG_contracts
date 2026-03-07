@@ -2,72 +2,54 @@
 pragma solidity ^0.8.20;
 
 import {PackedUserOperation} from "../../interfaces/PackedUserOperation.sol";
-import {IValidator, IModule} from "../../interfaces/ERC7579.sol";
-import {ECDSA} from "../../libs/ECDSA.sol";
+import {IValidator, ModuleType} from "../../interfaces/ERC7579.sol";
 
-interface ISmartAccountOwnerView {
-    function owner() external view returns (address);
-}
-
-/// @notice Lane-specific validator for ContextObservatory actions.
-/// - checks laneKey (top 192 bits of userOp.nonce)
-/// - checks callData targets ContextObservatory + exact selector
-/// - verifies signature by SmartAccount.owner()
-///
-/// Note: Paymaster already enforces the same target+selector and charges gas.
-/// Validator is defense-in-depth + keeps account validation consistent.
+/// @notice Shared, stateless policy validator for a specific ContextObservatory lane.
+/// @dev Authentication is handled by another validator (e.g. PasskeyValidator) in the same aggregator.
+///      This module only enforces lane / target / selector policy.
 contract ContextObservatoryLaneValidator is IValidator {
-    using ECDSA for bytes32;
+    uint256 internal constant SIG_VALIDATION_FAILED = 1;
 
-    error NotInstalled();
     error BadLane();
     error NotAllowedCall();
-    error BadSignature();
 
-    bool public installed;
-    address public smartAccount;
-    address public contextObservatory;
-    uint192 public expectedLaneKey;
-    bytes4 public allowedSelector;
-
-    function _first4(bytes memory b) internal pure returns (bytes4 sel) {
-        if (b.length < 4) revert NotAllowedCall();
-        assembly {
-            sel := mload(add(b, 32))
-        }
-    }
-
-    function onInstall(bytes calldata data) external override {
-        // initData = abi.encode(contextObservatory, expectedLaneKey, allowedSelector)
-        (contextObservatory, expectedLaneKey, allowedSelector) = abi.decode(
-            data,
-            (address, uint192, bytes4)
+    bytes4 internal constant EXEC_FROM_ENTRYPOINT_SELECTOR =
+        bytes4(
+            keccak256("executeFromEntryPoint(uint192,address,uint256,bytes)")
         );
-        installed = true;
-        smartAccount = msg.sender;
+    bytes4 internal constant EXEC_USEROP_SELECTOR =
+        bytes4(keccak256("executeUserOp(address,uint256,bytes,uint256)"));
+
+    address public immutable contextObservatory;
+    uint192 public immutable expectedLaneKey;
+    bytes4 public immutable allowedSelector;
+
+    constructor(
+        address _contextObservatory,
+        uint192 _expectedLaneKey,
+        bytes4 _allowedSelector
+    ) {
+        contextObservatory = _contextObservatory;
+        expectedLaneKey = _expectedLaneKey;
+        allowedSelector = _allowedSelector;
     }
 
-    function onUninstall(bytes calldata) external override {
-        installed = false;
-    }
+    function onInstall(bytes calldata) external pure override {}
+    function onUninstall(bytes calldata) external pure override {}
 
-    function isModuleType(uint256 typeId) external pure returns (bool) {
-        // ModuleType.VALIDATOR == 1 in your ERC7579.sol
-        return typeId == 1;
+    function isModuleType(
+        uint256 typeId
+    ) external pure override returns (bool) {
+        return typeId == ModuleType.VALIDATOR;
     }
 
     function validateUserOp(
         PackedUserOperation calldata userOp,
-        bytes32 userOpHash
+        bytes32
     ) external view override returns (uint256 validationData) {
-        if (!installed || msg.sender != smartAccount) revert NotInstalled();
-
         uint192 laneKey = uint192(uint256(userOp.nonce) >> 64);
         if (laneKey != expectedLaneKey) revert BadLane();
 
-        // Require outer call is either:
-        // 1) executeFromEntryPoint(uint192,address,uint256,bytes)
-        // 2) executeUserOp(address,uint256,bytes,uint256)
         bytes calldata cd = userOp.callData;
         if (cd.length < 4) revert NotAllowedCall();
         bytes4 outerSel = bytes4(cd[0:4]);
@@ -75,14 +57,7 @@ contract ContextObservatoryLaneValidator is IValidator {
         address target;
         bytes memory inner;
 
-        if (
-            outerSel ==
-            bytes4(
-                keccak256(
-                    "executeFromEntryPoint(uint192,address,uint256,bytes)"
-                )
-            )
-        ) {
+        if (outerSel == EXEC_FROM_ENTRYPOINT_SELECTOR) {
             (
                 uint192 laneKeyArg,
                 address to,
@@ -93,10 +68,7 @@ contract ContextObservatoryLaneValidator is IValidator {
             if (value != 0) revert NotAllowedCall();
             target = to;
             inner = data;
-        } else if (
-            outerSel ==
-            bytes4(keccak256("executeUserOp(address,uint256,bytes,uint256)"))
-        ) {
+        } else if (outerSel == EXEC_USEROP_SELECTOR) {
             (
                 address to,
                 uint256 value,
@@ -116,27 +88,21 @@ contract ContextObservatoryLaneValidator is IValidator {
         if (inner.length < 4) revert NotAllowedCall();
         if (_first4(inner) != allowedSelector) revert NotAllowedCall();
 
-        // Signature by SmartAccount.owner()
-        address signer = ISmartAccountOwnerView(userOp.sender).owner();
-        address recovered = userOpHash.toEthSignedMessageHash().recover(
-            userOp.signature
-        );
-        if (recovered != signer) return 1; // SIG_VALIDATION_FAILED
-
         return 0;
     }
 
-    // ERC-1271 style signature check with explicit sender.
-    // Some ERC-7579 validator interfaces require this.
     function isValidSignatureWithSender(
-        address sender,
-        bytes32 hash,
-        bytes calldata signature
-    ) external view returns (bytes4) {
-        if (!installed) revert NotInstalled();
-        // sender should be the SmartAccount
-        address signer = ISmartAccountOwnerView(sender).owner();
-        address recovered = hash.toEthSignedMessageHash().recover(signature);
-        return recovered == signer ? bytes4(0x1626ba7e) : bytes4(0xffffffff);
+        address,
+        bytes32,
+        bytes calldata
+    ) external pure override returns (bytes4) {
+        return 0x1626ba7e;
+    }
+
+    function _first4(bytes memory b) internal pure returns (bytes4 sel) {
+        if (b.length < 4) revert NotAllowedCall();
+        assembly {
+            sel := mload(add(b, 32))
+        }
     }
 }

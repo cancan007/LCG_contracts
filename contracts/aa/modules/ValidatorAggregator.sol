@@ -6,13 +6,8 @@ import {IValidator, ModuleType} from "../interfaces/ERC7579.sol";
 import {VersionedAggregatorBase} from "./VersionedAggregatorBase.sol";
 
 /// @notice Versioned validator aggregator.
-/// - You manage "active validator set" by version (major/minor/patch).
-/// - validateUserOp tries validators in order; first non-failure wins.
-/// - Intended as your "dev / ops" surface: upgrade/downgrade by switching the active set.
-///
-/// IMPORTANT:
-/// - This contract must be installed as a VALIDATOR module in the SmartAccount.
-/// - It expe96 `onlyAuditor` to be the SmartAccount address.
+/// @dev All active validators must pass. This lets you compose authentication
+///      (e.g. PasskeyValidator) and lane policy validators safely.
 contract ValidatorAggregator is VersionedAggregatorBase, IValidator {
     uint256 internal constant SIG_VALIDATION_FAILED = 1;
     struct Snapshot {
@@ -20,7 +15,6 @@ contract ValidatorAggregator is VersionedAggregatorBase, IValidator {
     }
 
     address auditor;
-
     mapping(uint96 => Snapshot) private _snapshots;
     address[] private _activeValidators;
 
@@ -36,19 +30,14 @@ contract ValidatorAggregator is VersionedAggregatorBase, IValidator {
     function setAuditor(address newAuditor) external onlyAuditor {
         auditor = newAuditor;
     }
-
-    // IModule
     function isModuleType(
         uint256 moduleTypeId
     ) external pure override returns (bool) {
         return moduleTypeId == ModuleType.VALIDATOR;
     }
+    function onInstall(bytes calldata) external override {}
+    function onUninstall(bytes calldata) external override {}
 
-    function onInstall(bytes calldata data) external override onlyAuditor {}
-
-    function onUninstall(bytes calldata) external override onlyAuditor {}
-
-    // Ops
     function upgrade(
         uint32 major,
         uint32 minor,
@@ -64,34 +53,32 @@ contract ValidatorAggregator is VersionedAggregatorBase, IValidator {
         uint32 minor,
         uint32 patch
     ) external onlyAuditor {
-        _downgrade(major, minor, patch); // checks version existence and emits event
+        _downgrade(major, minor, patch);
     }
-
     function getCurrentValidators() external view returns (address[] memory) {
         return _activeValidators;
     }
-
     function getActiveValidators() external view returns (address[] memory) {
         uint96 tag = this.activeVersionTag();
-        (uint32 major, uint32 minor, uint32 patch) = _versionTagParse(tag); // sanity check for overflow
-        address[] memory validators = _loadSnapshot(major, minor, patch);
-        return validators;
+        (uint32 major, uint32 minor, uint32 patch) = _versionTagParse(tag);
+        return _loadSnapshot(major, minor, patch);
     }
 
-    // -----------------------------
-    // IValidator
-    // -----------------------------
     function validateUserOp(
         PackedUserOperation calldata userOp,
         bytes32 userOpHash
     ) external override returns (uint256) {
         address[] memory list = _activeValidators;
         uint256 n = list.length;
+        if (n == 0) return SIG_VALIDATION_FAILED;
+
+        uint256 merged;
         for (uint256 i = 0; i < n; i++) {
             uint256 vd = IValidator(list[i]).validateUserOp(userOp, userOpHash);
-            if (vd != SIG_VALIDATION_FAILED) return vd;
+            if (vd == SIG_VALIDATION_FAILED) return SIG_VALIDATION_FAILED;
+            merged |= vd;
         }
-        return SIG_VALIDATION_FAILED;
+        return merged;
     }
 
     function isValidSignatureWithSender(
@@ -101,20 +88,21 @@ contract ValidatorAggregator is VersionedAggregatorBase, IValidator {
     ) external view override returns (bytes4) {
         address[] memory list = _activeValidators;
         uint256 n = list.length;
+        if (n == 0) return bytes4(0);
+
+        bytes4 finalMagic = 0x1626ba7e;
         for (uint256 i = 0; i < n; i++) {
             bytes4 magic = IValidator(list[i]).isValidSignatureWithSender(
                 sender,
                 hash,
                 signature
             );
-            if (magic != bytes4(0)) return magic;
+            if (magic == bytes4(0)) return bytes4(0);
+            finalMagic = magic;
         }
-        return bytes4(0);
+        return finalMagic;
     }
 
-    // -----------------------------
-    // internal
-    // -----------------------------
     function _currentModules()
         internal
         view
@@ -123,14 +111,11 @@ contract ValidatorAggregator is VersionedAggregatorBase, IValidator {
     {
         return _activeValidators;
     }
-
     function _replaceModules(address[] memory newModules) internal override {
         delete _activeValidators;
-        for (uint256 i = 0; i < newModules.length; i++) {
+        for (uint256 i = 0; i < newModules.length; i++)
             _activeValidators.push(newModules[i]);
-        }
     }
-
     function _storeSnapshot(
         uint32 major,
         uint32 minor,
@@ -140,7 +125,6 @@ contract ValidatorAggregator is VersionedAggregatorBase, IValidator {
         uint96 tag = _versionTag(major, minor, patch);
         _snapshots[tag] = Snapshot({validators: validators});
     }
-
     function _loadSnapshot(
         uint32 major,
         uint32 minor,

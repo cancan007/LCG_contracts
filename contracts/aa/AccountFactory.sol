@@ -2,8 +2,11 @@
 pragma solidity ^0.8.20;
 
 import {SmartAccount} from "./SmartAccount.sol";
+import {ModuleType} from "./interfaces/ERC7579.sol";
 
 /// @notice Simple CREATE2 factory for SmartAccount deployments.
+/// @dev It can optionally install a shared default validator and wire it to the
+///      default lane after deployment.
 contract AccountFactory {
     event AccountDeployed(
         address indexed account,
@@ -25,7 +28,7 @@ contract AccountFactory {
     ) external view returns (address) {
         bytes memory initCode = abi.encodePacked(
             type(SmartAccount).creationCode,
-            abi.encode(owner, entryPoint, defaultValidator, abi.encode(owner)) // validator init: owner
+            abi.encode(address(this), entryPoint)
         );
         bytes32 hash = keccak256(
             abi.encodePacked(
@@ -44,7 +47,7 @@ contract AccountFactory {
     ) external returns (address account) {
         bytes memory initCode = abi.encodePacked(
             type(SmartAccount).creationCode,
-            abi.encode(owner, entryPoint, defaultValidator, abi.encode(owner))
+            abi.encode(address(this), entryPoint)
         );
 
         assembly {
@@ -53,6 +56,14 @@ contract AccountFactory {
                 revert(0, 0)
             }
         }
+
+        SmartAccount acct = SmartAccount(payable(account));
+        if (defaultValidator != address(0)) {
+            acct.installModule(ModuleType.VALIDATOR, defaultValidator, "");
+            acct.setLaneValidator(0, defaultValidator);
+        }
+        acct.setOwner(owner);
+
         emit AccountDeployed(account, owner, salt);
     }
 }

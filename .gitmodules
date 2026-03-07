@@ -6,4 +6,4 @@
 	url = https://github.com/OpenZeppelin/openzeppelin-contracts
 [submodule "lib/webauthn-sol"]
 	path = lib/webauthn-sol
-	url = https://github.com/base-org/webauthn-sol.git
+	url = https://github.com/base-org/webauthn-sol

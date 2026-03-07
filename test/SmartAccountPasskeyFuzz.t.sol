@@ -7,16 +7,8 @@ import {SmartAccount} from "../contracts/aa/SmartAccount.sol";
 import {ModuleType} from "../contracts/aa/interfaces/ERC7579.sol";
 import {PackedUserOperation} from "../contracts/aa/interfaces/PackedUserOperation.sol";
 import {MockEntryPointV07} from "../contracts/aa/mocks/MockEntryPointV07.sol";
-
 import {PasskeyValidatorMock} from "../contracts/aa/mocks/PasskeyValidatorMock.sol";
 
-/// @notice Foundry fuzz tests for "Passkey-style" validation.
-///
-/// These tests focus on the AA/security invariants that should remain true regardless of
-/// whether the underlying signer is an EOA (secp256k1) or a Passkey (WebAuthn / P-256):
-/// - The approval is bound to the exact action (callData etc.) via userOpHash.
-/// - Lane nonce sequencing only increments on successful validation.
-/// - Wrong challenge / RP / credential / signCount => signature failure (no revert).
 contract SmartAccountPasskeyFuzzTest is Test {
     MockEntryPointV07 internal ep;
     SmartAccount internal account;
@@ -30,11 +22,14 @@ contract SmartAccountPasskeyFuzzTest is Test {
         account = new SmartAccount(address(this), address(ep));
         passkey = new PasskeyValidatorMock();
 
-        account.installModule(
-            ModuleType.VALIDATOR,
-            address(passkey),
-            abi.encode(RP_ID_HASH, CRED_HASH)
+        account.setPasskeyCredential(
+            RP_ID_HASH,
+            uint256(CRED_HASH),
+            1,
+            false,
+            CRED_HASH
         );
+        account.installModule(ModuleType.VALIDATOR, address(passkey), "");
         account.setLaneValidator(0, address(passkey));
     }
 
@@ -99,11 +94,8 @@ contract SmartAccountPasskeyFuzzTest is Test {
             seq,
             ""
         );
-
-        // Ensure it's wrong
         if (wrongChallenge == h)
             wrongChallenge = keccak256(abi.encodePacked(h, "x"));
-
         op.signature = abi.encode(
             wrongChallenge,
             RP_ID_HASH,
@@ -140,7 +132,6 @@ contract SmartAccountPasskeyFuzzTest is Test {
 
         bytes32 rp = wrongRp ? keccak256("evil.com") : RP_ID_HASH;
         bytes32 cred = wrongCred ? keccak256("other-credential") : CRED_HASH;
-
         op.signature = abi.encode(h, rp, cred, signCount);
 
         vm.prank(address(ep));
@@ -166,7 +157,6 @@ contract SmartAccountPasskeyFuzzTest is Test {
     function test_passkey_signCount_must_increase() public {
         bytes memory callData = hex"deadbeef";
 
-        // 1) succeed with signCount=10
         uint64 seq0 = account.nonceSequence(0);
         (PackedUserOperation memory op0, bytes32 h0) = _mkOp(
             callData,
@@ -180,7 +170,6 @@ contract SmartAccountPasskeyFuzzTest is Test {
         uint256 vd0 = account.validateUserOp(op0, h0, 0);
         assertEq(vd0, 0);
 
-        // 2) Next op must use seq1; try reusing signCount=10 => validator fails (even though challenge matches)
         uint64 seq1 = account.nonceSequence(0);
         (PackedUserOperation memory op1, bytes32 h1) = _mkOp(
             callData,
@@ -199,7 +188,6 @@ contract SmartAccountPasskeyFuzzTest is Test {
             "nonce must not change on failure"
         );
 
-        // 3) signCount=11 => success
         op1.signature = abi.encode(h1, RP_ID_HASH, CRED_HASH, uint32(11));
         vm.prank(address(ep));
         uint256 vd2 = account.validateUserOp(op1, h1, 0);

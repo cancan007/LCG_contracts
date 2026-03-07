@@ -9,7 +9,6 @@ import {PackedUserOperation} from "../contracts/aa/interfaces/PackedUserOperatio
 import {PasskeyValidator} from "../contracts/aa/validators/PasskeyValidator.sol";
 
 import {Base64} from "openzeppelin-contracts/contracts/utils/Base64.sol";
-// webauthn-sol
 import {WebAuthn} from "webauthn-sol/WebAuthn.sol";
 
 contract PasskeyValidatorTest is Test {
@@ -21,22 +20,17 @@ contract PasskeyValidatorTest is Test {
     uint256 internal y;
 
     function setUp() public {
-        // harness acts as EntryPoint
         account = new SmartAccount(address(this), address(this));
         v = new PasskeyValidator();
 
-        // Values copied from webauthn-sol README example usage :contentReference[oaicite:7]{index=7}
         rp = bytes32(
             hex"49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d9763"
         );
         x = 28573233055232466711029625910063034642429572463461595413086259353299906450061;
         y = 39367742072897599771788408398752356480431855827262528811857788332151452825281;
 
-        account.installModule(
-            ModuleType.VALIDATOR,
-            address(v),
-            abi.encode(rp, x, y, true, bytes32(0))
-        );
+        account.setPasskeyCredential(rp, x, y, true, bytes32(0));
+        account.installModule(ModuleType.VALIDATOR, address(v), "");
         account.setLaneValidator(0, address(v));
     }
 
@@ -46,7 +40,6 @@ contract PasskeyValidatorTest is Test {
         );
         bytes memory challenge = abi.encode(userOpHash);
 
-        // setUpで state 変数化した x,y を使う前提
         WebAuthn.WebAuthnAuth memory auth = WebAuthn.WebAuthnAuth({
             authenticatorData: hex"49960de5880e8c687434170f6476605b8fe4aeb9a28632c7995cf3ba831d97630500000101",
             clientDataJSON: string.concat(
@@ -67,7 +60,7 @@ contract PasskeyValidatorTest is Test {
 
         PackedUserOperation memory op = PackedUserOperation({
             sender: address(account),
-            nonce: 0, // laneKey=0 seq=0
+            nonce: 0,
             initCode: "",
             callData: hex"",
             accountGasLimits: bytes32(0),
