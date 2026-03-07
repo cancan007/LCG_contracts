@@ -106,6 +106,31 @@
         - こちら持ちなら、文脈ごとにownerの被るAA作成はできないようにする
     - そもそも処理文脈を表現するlaneKeyがoperator依存だから、コントラクトに直接書く形にはできない(動的な状態変数とその操作関数が必要)
 
+# デプロイ手順
+
+## 開発側
+
+### デプロイ対象一覧
+
+- aggregator modules系
+- aggregatorに紐づく子modules系
+- smart accountを作成・管理するaccount factory
+- paymaster系
+
+### デプロイ方法
+
+`DeployAAInfra.s.sol`を呼べばLCGの処理群ごとのモジュールを全て作成可能（）
+
+## ユーザー側
+
+### デプロイ対象一覧
+
+- smart account自体
+
+### デプロイ方法
+
+- フロントからpasskey作成時に作成(passkeyがユーザー依存のためsmart accountに持たせる)
+
 ---
 
 2/14
