@@ -36,7 +36,7 @@ contract DeployAAInfra is Script {
         observatory.setAuthorNft(address(authorNft));
 
         PasskeyValidator passkeyValidator = new PasskeyValidator();
-        AccountFactory factory = new AccountFactory(entryPoint, address(0));
+        AccountFactory factory = new AccountFactory(entryPoint);
         ContextObservatoryPaymaster paymaster = new ContextObservatoryPaymaster(
             entryPoint,
             address(observatory),
@@ -71,6 +71,7 @@ contract DeployAAInfra is Script {
         );
 
         _deployLane(
+            factory,
             deployer,
             address(passkeyValidator),
             address(observatory),
@@ -78,6 +79,7 @@ contract DeployAAInfra is Script {
             selCreate
         );
         _deployLane(
+            factory,
             deployer,
             address(passkeyValidator),
             address(observatory),
@@ -85,6 +87,7 @@ contract DeployAAInfra is Script {
             selCommit
         );
         _deployLane(
+            factory,
             deployer,
             address(passkeyValidator),
             address(observatory),
@@ -109,6 +112,7 @@ contract DeployAAInfra is Script {
     }
 
     function _deployLane(
+        AccountFactory factory,
         address auditor,
         address passkeyValidator,
         address observatory,
@@ -138,6 +142,15 @@ contract DeployAAInfra is Script {
         address[] memory executors = new address[](1);
         executors[0] = address(laneExecutor);
         executorAggregator.upgrade(1, 0, 0, executors);
+
+        factory.configureBootstrapLane(
+            laneKey,
+            address(validatorAggregator),
+            address(0),
+            address(executorAggregator),
+            address(0),
+            true
+        );
 
         console2.log("laneKey:", uint256(laneKey));
         console2.log("  validatorAggregator:", address(validatorAggregator));

@@ -12,6 +12,7 @@ If you are here for the R&D thesis (“movement of meaning”), see `README_RND.
 - SmartAccount is a stable “intent interpreter” that enforces **deterministic phase boundaries**.
 - Domain variability lives in **modules**, composed through **aggregators**.
 - **New addition:** aggregators now support **version-tagged module sets** so upgrades/rollback are ops-friendly and auditable.
+- A key implementation point is that `AccountFactory` manages laneKey-specific shared aggregator modules, so creating a new SmartAccount does not require manual per-lane wiring by the user.
 
 ---
 
@@ -228,6 +229,56 @@ This keeps the SmartAccount stable while making upgrades:
 - monitorable (events),
 - and reversible (explicit rollback path).
 
+---
+
+## Bootstrap via AccountFactory (shared lane modules, simple account creation)
+
+A recent change is that shared lane-level aggregator modules are now registered in `AccountFactory`, not manually wired one-by-one at user deployment time.
+
+### Why this matters
+
+Without a bootstrap layer, creating a new SmartAccount would require:
+
+- deploying or selecting validator/executor aggregators
+- wiring them per lane
+- configuring the account manually after creation
+
+This quickly becomes operationally noisy when the application has multiple laneKeys.
+
+### Current approach
+
+`AccountFactory` acts as a bootstrap registry for lane-specific shared modules.
+
+For each laneKey, the factory stores:
+
+- validator aggregator
+- validation hook (optional)
+- executor aggregator
+- execution hook (optional)
+
+When a new `SmartAccount` is created, the factory:
+
+1. deploys the account
+2. installs the registered shared modules
+3. sets lane configs automatically
+4. transfers ownership to the user
+
+This means that user-side account creation becomes much simpler:
+
+- create SmartAccount
+- set passkey credential
+- use the app
+
+### Separation of responsibilities
+
+- `SmartAccount`: user-local state and stable intent interpreter
+- `AccountFactory`: bootstrap registry and account wiring
+- `ValidatorAggregator` / `ExecutorAggregator`: developer-controlled shared module surfaces
+- `PasskeyValidator`: stateless authentication validator
+- passkey credential: stored in `SmartAccount`, not in shared modules
+
+This keeps user-specific data local, while keeping operational composition in developer-controlled shared infrastructure.
+
 ## ContextObservatory (ERC-4337 Paymaster, owner-signed, dual execution)
 
 We sponsor gas for **ContextObservatory** operations via an **ERC-4337 v0.7 Paymaster**, and we require an **owner signature** so that third parties cannot burn a user’s sponsored balance by submitting arbitrary UserOps.
@@ -269,8 +320,27 @@ Deterministic derivation:
 ### Onchain components
 
 - `ContextObservatoryPaymaster`: holds per-account balances and pays gas
-- `ContextObservatoryLaneValidator`: one validator per action lane (signature + laneKey + selector + target)
+- `PasskeyValidator`: stateless authentication validator; reads passkey credential from `SmartAccount`
+- `ContextObservatoryLaneValidator`: shared lane policy validator (laneKey + selector + target)
 - `ContextObservatoryExecutor`: defense-in-depth executor (target + selector)
+- `ValidatorAggregator`: composes authentication + lane policy validators
+- `ExecutorAggregator`: shared execution surface for lane-specific execution policies
+
+### Validator composition
+
+In the current design, validator aggregation is not merely "pick one validator that passes."
+
+For a lane-specific action, validation is conceptually composed as:
+
+- authentication validator (`PasskeyValidator`)
+- lane policy validator (`ContextObservatoryLaneValidator`)
+
+This means that both:
+
+1. the user must be authenticated, and
+2. the action must match the lane-specific policy
+
+The aggregator therefore acts as a developer-controlled composition surface for combining authentication and per-lane policy.
 
 ### Dual execution path (both OK)
 

@@ -287,6 +287,30 @@ This may require:
 - a classification separate from protocol-level EIPs
 - recommended patterns for semantic AA modules
 
+--
+
+## Recent implementation updates
+
+The AA side of this repository has been further clarified in implementation:
+
+- passkey credentials are now stored in `SmartAccount`, not in shared validator modules
+- `PasskeyValidator` is stateless and reads user-specific credential data from the account
+- lane-specific validators/executors are treated as shared developer-managed modules
+- `AccountFactory` now serves as a bootstrap registry for laneKey-based shared aggregators
+
+This means a new user account can be created with a much simpler flow:
+
+1. deploy/create `SmartAccount`
+2. automatically attach pre-registered lane modules via `AccountFactory`
+3. store the user's passkey credential in the account
+4. begin using the application
+
+This preserves:
+
+- user-local identity material in the account
+- developer-controlled operational composition in shared module infrastructure
+- stable SmartAccount core logic
+
 ---
 
 ## Architectural Goals

@@ -90,7 +90,7 @@
 
 ---
 
-# AA関連コントラクト内訳
+# AA関連コントラクト内訳(メモ)
 
 - SmartAccount: ユーザーの「意図」の検証・権限有無などを統括するAAコントラクト
   - laneKey(処理文脈の識別子)
@@ -106,6 +106,28 @@
         - こちら持ちなら、文脈ごとにownerの被るAA作成はできないようにする
     - そもそも処理文脈を表現するlaneKeyがoperator依存だから、コントラクトに直接書く形にはできない(動的な状態変数とその操作関数が必要)
 
+# AA関連コントラクト内訳(確定)
+
+- SmartAccount: ユーザーの意図検証・laneごとの実行ルーティング・ユーザー依存状態の保持を担う
+  - laneKey(処理文脈の識別子)
+  - laneごとの validator / hook / executor の参照先
+  - passkey credential を保持する
+- PasskeyValidator:
+  - stateless な認証 validator
+  - sender の SmartAccount から passkey credential を読む
+- ContextObservatoryLaneValidator:
+  - laneKey / target / selector の整合性を担う shared policy validator
+  - 認証そのものではなく、処理文脈制約を担う
+- ContextObservatoryExecutor:
+  - target / selector を強制する shared executor
+- ValidatorAggregator / ExecutorAggregator:
+  - 開発側が管理する shared module surface
+  - laneごとの child modules を合成・運用する場所
+- AccountFactory:
+  - laneKey ごとの bootstrap module registry
+  - SmartAccount 作成時に shared aggregator modules を自動で紐づける
+  - 結果としてユーザー側の account 作成を簡易化する
+
 # デプロイ手順
 
 ## 開発側
@@ -119,17 +141,24 @@
 
 ### デプロイ方法
 
-`DeployAAInfra.s.sol`を呼べばLCGの処理群ごとのモジュールを全て作成可能（）
+- `DeployAAInfra.s.sol` を呼ぶ
+- laneKey ごとの shared validator/executor aggregators を deploy
+- AccountFactory に bootstrap lane 設定を登録する
+
+これにより、ユーザーが後から SmartAccount を作成する際、laneKey ごとの shared aggregator modules が自動的に account に紐づく
 
 ## ユーザー側
 
 ### デプロイ対象一覧
 
-- smart account自体
+- SmartAccount 自体
+- passkey credential の設定
 
 ### デプロイ方法
 
-- フロントからpasskey作成時に作成(passkeyがユーザー依存のためsmart accountに持たせる)
+- フロントから passkey 作成時に SmartAccount を作成
+- AccountFactory 経由で laneKey ごとの shared modules を自動セット
+- その後、ユーザー固有の passkey credential を SmartAccount に保存
 
 ---
 
