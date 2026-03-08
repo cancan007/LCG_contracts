@@ -42,9 +42,9 @@ contract ValidationPreHookAggregator is
         return moduleTypeId == ModuleType.HOOK;
     }
 
-    function onInstall(bytes calldata data) external override onlyAuditor {}
+    function onInstall(bytes calldata data) external override {}
 
-    function onUninstall(bytes calldata) external override onlyAuditor {}
+    function onUninstall(bytes calldata) external override {}
 
     function upgrade(
         uint32 major,

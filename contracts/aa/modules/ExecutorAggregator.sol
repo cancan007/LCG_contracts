@@ -28,8 +28,8 @@ contract ExecutorAggregator is VersionedAggregatorBase, IExecutor {
         auditor = newAuditor;
     }
 
-    function onInstall(bytes calldata) external override onlyAuditor {}
-    function onUninstall(bytes calldata) external override onlyAuditor {}
+    function onInstall(bytes calldata) external override {}
+    function onUninstall(bytes calldata) external override {}
     function isModuleType(
         uint256 moduleTypeId
     ) external pure override returns (bool) {

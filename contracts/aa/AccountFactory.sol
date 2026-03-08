@@ -66,11 +66,6 @@ contract AccountFactory {
             _bootstrapLaneKeys.push(laneKey);
         }
 
-        if (!_bootstrapLaneRegistered[laneKey]) {
-            _bootstrapLaneRegistered[laneKey] = true;
-            _bootstrapLaneKeys.push(laneKey);
-        }
-
         bootstrapLanes[laneKey] = BootstrapLane({
             laneKey: laneKey,
             validator: validator,
