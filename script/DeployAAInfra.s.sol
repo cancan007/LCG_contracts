@@ -22,7 +22,7 @@ contract DeployAAInfra is Script {
         address entryPoint = vm.envAddress("ENTRYPOINT");
         string memory industry = vm.envOr("INDUSTRY", string("R&D"));
         string memory service = vm.envOr("SERVICE", string("LCG"));
-        uint256 epDep = vm.envOr("EP_DEPOSIT_WEI", uint256(0.2 ether));
+        uint256 epDep = vm.envOr("EP_DEPOSIT_WEI", uint256(0.001 ether)); // Optionally fund the paymaster with some ETH to cover users' first transactions.
 
         vm.startBroadcast();
         address deployer = msg.sender;

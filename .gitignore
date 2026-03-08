@@ -5,7 +5,7 @@ typechain-types
 coverage
 crytic-export
 coverage.json
-.env
+.env*
 .DS_Store
 
 # Foundry

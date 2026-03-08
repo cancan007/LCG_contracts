@@ -9,7 +9,9 @@
     "echidna": "bash scripts/run-echidna-docker.sh",
     "fuzz": "forge test -vv",
     "format": "prettier --write .",
-    "extract-abi": "jq '.abi' out/ContextObservatoryV0.sol/ContextObservatoryV0.json > abi/ContextObservatoryV0.json"
+    "extract-abi": "jq '.abi' out/ContextObservatoryV0.sol/ContextObservatoryV0.json > abi/ContextObservatoryV0.json",
+    "dry-run-infra": "set -a && source $ENV_FILE &&  forge script script/DeployAAInfra.s.sol:DeployAAInfra --rpc-url $OP_SEPOLIA_RPC_URL -vvvv",
+    "deploy-aa-infra": "set -a && source $ENV_FILE &&  forge script script/DeployAAInfra.s.sol:DeployAAInfra --rpc-url $OP_SEPOLIA_RPC_URL --private-key $PRIVATE_KEY --broadcast -vvvv"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
