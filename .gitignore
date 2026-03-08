@@ -4,6 +4,7 @@ artifacts
 typechain-types
 coverage
 crytic-export
+broadcast
 coverage.json
 .env*
 .DS_Store
