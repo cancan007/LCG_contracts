@@ -86,13 +86,14 @@ contract PasskeyValidator is IValidator {
             return false;
         }
 
-        (WebAuthn.WebAuthnAuth memory auth, bytes32 credHash) = abi.decode(
+        (WebAuthn.WebAuthnAuth memory auth, bytes32 credIdHash) = abi.decode(
             signature,
             (WebAuthn.WebAuthnAuth, bytes32)
         );
 
         if (
-            credentialIdHashOpt != bytes32(0) && credHash != credentialIdHashOpt
+            credentialIdHashOpt != bytes32(0) &&
+            credIdHash != credentialIdHashOpt
         ) {
             return false;
         }
@@ -118,4 +119,92 @@ contract PasskeyValidator is IValidator {
                 pubKeyY
             );
     }
+
+    // function debugValidateUserOp(
+    //     address sender,
+    //     PackedUserOperation calldata userOp,
+    //     bytes32 userOpHash
+    // )
+    //     external
+    //     view
+    //     returns (
+    //         uint256 pubKeyX,
+    //         uint256 pubKeyY,
+    //         bool requireUV,
+    //         bytes memory authenticatorData,
+    //         string memory clientDataJSON,
+    //         uint256 sigLength,
+    //         bytes32 expectedChallenge,
+    //         bytes32 extractedCredHash,
+    //         bytes32 storedCredHash,
+    //         bytes32 extractedCredIdHash,
+    //         bytes32 storedCredIdHash,
+    //         bool verifyOk,
+    //         bool credHashMatches,
+    //         bool finalOk
+    //     )
+    // {
+    //     (
+    //         bytes32 rpIdHash,
+    //         uint256 pubKeyX,
+    //         uint256 pubKeyY,
+    //         bool requireUV,
+    //         bytes32 credentialIdHashOpt
+    //     ) = IPasskeyCredentialStore(sender).getPasskeyCredential();
+    //     // 1. validateUserOp と同じ decode
+    //     (WebAuthn.WebAuthnAuth memory auth, bytes32 credIdHash) = abi.decode(
+    //         userOp.signature,
+    //         (WebAuthn.WebAuthnAuth, bytes32)
+    //     );
+
+    //     // 2. validateUserOp と同じ challenge 作成
+    //     bytes32 challenge = userOpHash;
+
+    //     // 3. validateUserOp と同じ verify
+    //     bool ok = WebAuthn.verify(
+    //         abi.encode(challenge),
+    //         requireUV,
+    //         auth,
+    //         pubKeyX,
+    //         pubKeyY
+    //     );
+
+    //     bytes32 gotRp;
+    //     bytes memory ad = auth.authenticatorData;
+    //     assembly {
+    //         gotRp := mload(add(ad, 32))
+    //     }
+
+    //     bool matcher = credIdHash == credentialIdHashOpt;
+
+    //     bool finaler = matcher && rpIdHash == gotRp;
+
+    //     return (
+    //         pubKeyX,
+    //         pubKeyY,
+    //         requireUV,
+    //         ad,
+    //         string(auth.clientDataJSON),
+    //         userOp.signature.length,
+    //         challenge,
+    //         credIdHash,
+    //         credentialIdHashOpt,
+    //         gotRp,
+    //         rpIdHash,
+    //         ok,
+    //         matcher,
+    //         finaler
+    //     );
+    // }
+
+    // function debugExtractClientChallenge(
+    //     PackedUserOperation calldata userOp
+    // ) external pure returns (string memory clientDataJSON) {
+    //     (WebAuthn.WebAuthnAuth memory auth, ) = abi.decode(
+    //         userOp.signature,
+    //         (WebAuthn.WebAuthnAuth, bytes32)
+    //     );
+
+    //     return string(auth.clientDataJSON);
+    // }
 }

@@ -38,6 +38,37 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
     error NotAllowedCall();
     error InsufficientBalance();
 
+    error BadMode();
+    error BadEstimateSignature();
+    error BadFinalSignature();
+    error GasCapExceeded();
+
+    error BadPostOpContext();
+
+    error BadPostOpContextLength(uint256 len);
+    error BadPostOpDecode();
+    error BadPostOpSender(address caller);
+
+    uint8 internal constant MODE_ESTIMATE = 1;
+    uint8 internal constant MODE_FINAL = 2;
+
+    struct EstimateAuth {
+        uint48 validUntil;
+        uint48 validAfter;
+        bytes sig;
+    }
+
+    struct FinalAuth {
+        uint48 validUntil;
+        uint48 validAfter;
+        uint128 maxVerificationGas;
+        uint128 maxCallGas;
+        uint128 maxPreVerificationGas;
+        uint128 maxMaxPriorityFeePerGas;
+        uint128 maxMaxFeePerGas;
+        bytes sig;
+    }
+
     event Deposited(address indexed account, uint256 amount);
     event Withdrawn(
         address indexed account,
@@ -157,25 +188,17 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
     // -----------------------------
     function validatePaymasterUserOp(
         PackedUserOperation calldata userOp,
-        bytes32 /*userOpHash*/,
+        bytes32,
         uint256 maxCost
     ) external override returns (bytes memory context, uint256 validationData) {
-        // In real EntryPoint, msg.sender is EntryPoint.
-        // Keep strict check to avoid arbitrary callers draining balances via postOp.
         if (msg.sender != address(entryPoint)) revert NotEntryPoint();
 
-        (
-            uint48 validUntil,
-            uint48 validAfter,
-            bytes memory sig
-        ) = _parsePaymasterAndData(userOp.paymasterAndData);
-
-        // 1) Ensure the call is exactly one of the allowed ContextObservatory actions
         (
             uint192 laneKey,
             address target,
             bytes4 selector
         ) = _extractLaneTargetSelector(userOp.callData);
+
         if (target != contextObservatory) revert NotAllowedCall();
 
         if (selector == SEL_CREATE) {
@@ -188,43 +211,94 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
             revert NotAllowedCall();
         }
 
-        // 2) Signature gating: require SmartAccount.owner() signature
-        address signer = ISmartAccountOwnerView(userOp.sender).owner();
-        bytes32 reqHash = getPaymasterRequestHash(
-            userOp,
-            validUntil,
-            validAfter
-        );
-        address recovered = reqHash.toEthSignedMessageHash().recover(sig);
-        if (recovered != signer) revert BadSignature();
-
-        // 3) Reserve maxCost from user's paymaster balance (safe side)
         uint256 bal = balances[userOp.sender];
         if (bal < maxCost) revert InsufficientBalance();
-        unchecked {
-            balances[userOp.sender] = bal - maxCost;
+
+        address signer = ISmartAccountOwnerView(userOp.sender).owner();
+
+        (uint8 mode, bytes calldata body) = _parseMode(userOp.paymasterAndData);
+
+        if (mode == MODE_ESTIMATE) {
+            EstimateAuth memory a = _parseEstimateAuth(body);
+
+            bytes32 reqHash = getEstimateRequestHash(
+                userOp,
+                a.validUntil,
+                a.validAfter
+            );
+
+            address recovered = reqHash.toEthSignedMessageHash().recover(a.sig);
+            if (recovered != signer) revert BadEstimateSignature();
+
+            validationData = _packValidationData(a.validUntil, a.validAfter);
+            return ("", validationData);
         }
 
-        // Context passed to postOp for refunding unused gas
-        context = abi.encode(userOp.sender, maxCost);
-        validationData = _packValidationData(validUntil, validAfter);
+        if (mode == MODE_FINAL) {
+            FinalAuth memory a = _parseFinalAuth(body);
 
-        emit Charged(userOp.sender, maxCost, validUntil, validAfter);
+            if (
+                !_checkGasCaps(
+                    userOp,
+                    a.maxVerificationGas,
+                    a.maxCallGas,
+                    a.maxPreVerificationGas,
+                    a.maxMaxPriorityFeePerGas,
+                    a.maxMaxFeePerGas
+                )
+            ) revert GasCapExceeded();
+
+            bytes32 reqHash = getFinalRequestHash(
+                userOp,
+                a.validUntil,
+                a.validAfter
+            );
+
+            address recovered = reqHash.toEthSignedMessageHash().recover(a.sig);
+            if (recovered != signer) revert BadFinalSignature();
+
+            unchecked {
+                balances[userOp.sender] = bal - maxCost;
+            }
+
+            context = abi.encode(userOp.sender, maxCost);
+            validationData = _packValidationData(a.validUntil, a.validAfter);
+
+            emit Charged(userOp.sender, maxCost, a.validUntil, a.validAfter);
+            return (context, validationData);
+        }
+
+        revert BadMode();
     }
 
     function postOp(
         PostOpMode /*mode*/,
         bytes calldata context,
-        uint256 actualGasCost
+        uint256 actualGasCost,
+        uint256 /*actualUserOpFeePerGas*/
     ) external override {
-        if (msg.sender != address(entryPoint)) revert NotEntryPoint();
+        if (msg.sender != address(entryPoint)) {
+            revert BadPostOpSender(msg.sender);
+        }
 
-        (address account, uint256 reserved) = abi.decode(
-            context,
-            (address, uint256)
-        );
+        if (context.length == 0) {
+            // estimate mode など context なしを許容するなら、ここで return
+            return;
+        }
 
-        // refund unused portion back to the user's internal balance
+        if (context.length != 64) {
+            revert BadPostOpContextLength(context.length);
+        }
+
+        address account;
+        uint256 reserved;
+        try this._decodePostOpContext(context) returns (address a, uint256 r) {
+            account = a;
+            reserved = r;
+        } catch {
+            revert BadPostOpDecode();
+        }
+
         if (reserved > actualGasCost) {
             uint256 refund = reserved - actualGasCost;
             balances[account] += refund;
@@ -234,16 +308,45 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
         }
     }
 
-    // -----------------------------
-    // Hashing / decoding helpers
-    // -----------------------------
-    function getPaymasterRequestHash(
+    function _decodePostOpContext(
+        bytes calldata context
+    ) external pure returns (address, uint256) {
+        return abi.decode(context, (address, uint256));
+    }
+
+    function getEstimateRequestHash(
         PackedUserOperation calldata userOp,
         uint48 validUntil,
         uint48 validAfter
     ) public view returns (bytes32) {
-        // Excludes paymasterAndData to avoid circular dependency.
-        // Includes this paymaster and chainid to prevent cross-contract replay.
+        (
+            uint192 laneKey,
+            address target,
+            bytes4 selector
+        ) = _extractLaneTargetSelector(userOp.callData);
+
+        return
+            keccak256(
+                abi.encode(
+                    block.chainid,
+                    address(this),
+                    uint8(MODE_ESTIMATE),
+                    userOp.sender,
+                    laneKey,
+                    target,
+                    selector,
+                    keccak256(userOp.callData),
+                    validUntil,
+                    validAfter
+                )
+            );
+    }
+
+    function getFinalRequestHash(
+        PackedUserOperation calldata userOp,
+        uint48 validUntil,
+        uint48 validAfter
+    ) public view returns (bytes32) {
         return
             keccak256(
                 abi.encode(
@@ -251,26 +354,20 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
                     address(this),
                     userOp.sender,
                     userOp.nonce,
-                    keccak256(userOp.initCode),
                     keccak256(userOp.callData),
-                    userOp.accountGasLimits,
-                    userOp.preVerificationGas,
-                    userOp.gasFees,
                     validUntil,
                     validAfter
                 )
             );
     }
 
-    function _parsePaymasterAndData(
+    function _parseMode(
         bytes calldata pad
-    )
-        internal
-        view
-        returns (uint48 validUntil, uint48 validAfter, bytes memory sig)
-    {
-        // minimal length: 20 + 6 + 6 + 65
-        if (pad.length < 20 + 6 + 6 + 65) revert BadPaymasterAndData();
+    ) internal view returns (uint8 mode, bytes calldata body) {
+        // [20:36] paymaster gas fields already included in paymasterAndData
+        // body starts after:
+        // 20 bytes paymaster + 16 + 16 bytes gas fields
+        if (pad.length < 20 + 16 + 16 + 1) revert BadPaymasterAndData();
 
         address pm;
         assembly {
@@ -278,13 +375,76 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
         }
         if (pm != address(this)) revert BadPaymasterAndData();
 
-        uint256 off = 20;
-        validUntil = uint48(bytes6(pad[off:off + 6]));
+        uint256 off = 20 + 16 + 16;
+        mode = uint8(bytes1(pad[off:off + 1]));
+        body = pad[off + 1:];
+    }
+
+    function _parseEstimateAuth(
+        bytes calldata body
+    ) internal pure returns (EstimateAuth memory a) {
+        // [mode:1][validUntil:6][validAfter:6][sig:65+]
+        if (body.length < 6 + 6 + 65) revert BadPaymasterAndData();
+
+        uint256 off = 0;
+        a.validUntil = uint48(bytes6(body[off:off + 6]));
         off += 6;
-        validAfter = uint48(bytes6(pad[off:off + 6]));
+        a.validAfter = uint48(bytes6(body[off:off + 6]));
+        off += 6;
+        a.sig = body[off:];
+    }
+
+    function _parseFinalAuth(
+        bytes calldata body
+    ) internal pure returns (FinalAuth memory a) {
+        // [mode:1]
+        // [validUntil:6][validAfter:6]
+        // [maxVerificationGas:16][maxCallGas:16][maxPreVerificationGas:16]
+        // [maxMaxPriorityFeePerGas:16][maxMaxFeePerGas:16]
+        // [sig:65+]
+        if (body.length < 6 + 6 + 16 * 5 + 65) revert BadPaymasterAndData();
+
+        uint256 off = 0;
+        a.validUntil = uint48(bytes6(body[off:off + 6]));
+        off += 6;
+        a.validAfter = uint48(bytes6(body[off:off + 6]));
         off += 6;
 
-        sig = pad[off:];
+        a.maxVerificationGas = uint128(bytes16(body[off:off + 16]));
+        off += 16;
+        a.maxCallGas = uint128(bytes16(body[off:off + 16]));
+        off += 16;
+        a.maxPreVerificationGas = uint128(bytes16(body[off:off + 16]));
+        off += 16;
+        a.maxMaxPriorityFeePerGas = uint128(bytes16(body[off:off + 16]));
+        off += 16;
+        a.maxMaxFeePerGas = uint128(bytes16(body[off:off + 16]));
+        off += 16;
+
+        a.sig = body[off:];
+    }
+
+    function _checkGasCaps(
+        PackedUserOperation calldata userOp,
+        uint128 maxVerificationGas,
+        uint128 maxCallGas,
+        uint128 maxPreVerificationGas,
+        uint128 maxMaxPriorityFeePerGas,
+        uint128 maxMaxFeePerGas
+    ) internal pure returns (bool) {
+        uint128 verificationGasLimit = uint128(
+            bytes16(userOp.accountGasLimits)
+        );
+        uint128 callGasLimit = uint128(uint256(userOp.accountGasLimits));
+        uint128 maxPriorityFeePerGas = uint128(bytes16(userOp.gasFees));
+        uint128 maxFeePerGas = uint128(uint256(userOp.gasFees));
+
+        return
+            verificationGasLimit <= maxVerificationGas &&
+            callGasLimit <= maxCallGas &&
+            userOp.preVerificationGas <= maxPreVerificationGas &&
+            maxPriorityFeePerGas <= maxMaxPriorityFeePerGas &&
+            maxFeePerGas <= maxMaxFeePerGas;
     }
 
     function _packValidationData(
@@ -350,6 +510,123 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
 
         revert NotAllowedCall();
     }
+
+    // // Temporary for debug test(should be removed)
+    // function debugValidateMode(
+    //     PackedUserOperation calldata userOp,
+    //     uint256 maxCost
+    // )
+    //     external
+    //     view
+    //     returns (
+    //         uint8 mode,
+    //         uint48 validUntil,
+    //         uint48 validAfter,
+    //         uint192 laneKey,
+    //         address target,
+    //         bytes4 selector,
+    //         bytes32 reqHash,
+    //         address signer,
+    //         address recovered,
+    //         bool allowedCall,
+    //         bool enoughBalance,
+    //         bool gasCapsOk
+    //     )
+    // {
+    //     (laneKey, target, selector) = _extractLaneTargetSelector(
+    //         userOp.callData
+    //     );
+
+    //     allowedCall = false;
+    //     if (target == contextObservatory) {
+    //         if (selector == SEL_CREATE && laneKey == laneCreate) {
+    //             allowedCall = true;
+    //         } else if (selector == SEL_COMMIT && laneKey == laneCommit) {
+    //             allowedCall = true;
+    //         } else if (selector == SEL_REDEEM && laneKey == laneRedeem) {
+    //             allowedCall = true;
+    //         }
+    //     }
+
+    //     enoughBalance = balances[userOp.sender] >= maxCost;
+    //     signer = ISmartAccountOwnerView(userOp.sender).owner();
+
+    //     (uint8 _mode, bytes calldata body) = _parseMode(
+    //         userOp.paymasterAndData
+    //     );
+
+    //     if (_mode == MODE_ESTIMATE) {
+    //         EstimateAuth memory a = _parseEstimateAuth(body);
+    //         validUntil = a.validUntil;
+    //         validAfter = a.validAfter;
+    //         reqHash = getEstimateRequestHash(
+    //             userOp,
+    //             a.validUntil,
+    //             a.validAfter
+    //         );
+    //         recovered = reqHash.toEthSignedMessageHash().recover(a.sig);
+    //         gasCapsOk = true;
+    //         return (
+    //             mode,
+    //             validUntil,
+    //             validAfter,
+    //             laneKey,
+    //             target,
+    //             selector,
+    //             reqHash,
+    //             signer,
+    //             recovered,
+    //             allowedCall,
+    //             enoughBalance,
+    //             gasCapsOk
+    //         );
+    //     }
+
+    //     if (mode == MODE_FINAL) {
+    //         FinalAuth memory a = _parseFinalAuth(body);
+    //         validUntil = a.validUntil;
+    //         validAfter = a.validAfter;
+    //         gasCapsOk = _checkGasCaps(
+    //             userOp,
+    //             a.maxVerificationGas,
+    //             a.maxCallGas,
+    //             a.maxPreVerificationGas,
+    //             a.maxMaxPriorityFeePerGas,
+    //             a.maxMaxFeePerGas
+    //         );
+    //         reqHash = getFinalRequestHash(userOp, a.validUntil, a.validAfter);
+    //         recovered = reqHash.toEthSignedMessageHash().recover(a.sig);
+    //         return (
+    //             mode,
+    //             validUntil,
+    //             validAfter,
+    //             laneKey,
+    //             target,
+    //             selector,
+    //             reqHash,
+    //             signer,
+    //             recovered,
+    //             allowedCall,
+    //             enoughBalance,
+    //             gasCapsOk
+    //         );
+    //     }
+
+    //     return (
+    //         mode,
+    //         validUntil,
+    //         validAfter,
+    //         laneKey,
+    //         target,
+    //         selector,
+    //         bytes32(0),
+    //         signer,
+    //         address(0),
+    //         allowedCall,
+    //         enoughBalance,
+    //         false
+    //     );
+    // }
 
     receive() external payable {}
 }

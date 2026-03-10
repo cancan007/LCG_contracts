@@ -20,6 +20,7 @@ interface IPaymasterV07 {
     function postOp(
         PostOpMode mode,
         bytes calldata context,
-        uint256 actualGasCost
+        uint256 actualGasCost,
+        uint256
     ) external;
 }
