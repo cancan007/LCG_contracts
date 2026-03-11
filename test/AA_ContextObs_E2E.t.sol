@@ -57,6 +57,12 @@ contract AA_ContextObs_E2E is Test {
     bytes4 internal constant SEL_REDEEM =
         bytes4(keccak256("redeem(uint256,uint256,string,string,bytes32[])"));
 
+    uint8 internal constant MODE_ESTIMATE = 1;
+    uint8 internal constant MODE_FINAL = 2;
+
+    uint128 internal constant PM_VERIFICATION_GAS = 150_000;
+    uint128 internal constant PM_POSTOP_GAS = 50_000;
+
     function setUp() public {
         owner = vm.addr(OWNER_PK);
 
@@ -96,7 +102,7 @@ contract AA_ContextObs_E2E is Test {
             false,
             CRED_HASH
         );
-        account.installModule(ModuleType.VALIDATOR, address(passkey), "");
+        // account.installModule(ModuleType.VALIDATOR, address(passkey), "");
         vm.stopPrank();
 
         aggCreate = _installLane(laneCreate, SEL_CREATE);
@@ -117,17 +123,17 @@ contract AA_ContextObs_E2E is Test {
                 laneKey,
                 sel
             );
+
         agg = new ValidatorAggregator(owner);
 
         vm.startPrank(owner);
-        account.installModule(ModuleType.VALIDATOR, address(laneValidator), "");
-        account.installModule(ModuleType.VALIDATOR, address(agg), "");
 
         address[] memory validators = new address[](2);
         validators[0] = address(passkey);
         validators[1] = address(laneValidator);
         agg.upgrade(1, 0, 0, validators);
 
+        account.installModule(ModuleType.VALIDATOR, address(agg), "");
         account.setLaneValidator(laneKey, address(agg));
         vm.stopPrank();
     }
@@ -180,28 +186,73 @@ contract AA_ContextObs_E2E is Test {
     ) internal pure returns (PackedUserOperation memory) {
         uint256 callGas = 200_000;
         uint256 verifGas = 400_000;
-        op.accountGasLimits = bytes32((verifGas << 128) | callGas);
+        op.accountGasLimits = bytes32(uint256((verifGas << 128) | callGas));
         op.preVerificationGas = 50_000;
         uint256 maxFee = 1 gwei;
         uint256 maxPrio = 1 gwei;
-        op.gasFees = bytes32((maxPrio << 128) | maxFee);
+        op.gasFees = bytes32(uint256((maxPrio << 128) | maxFee));
         return op;
     }
 
-    function _paymasterAndData(
+    function _finalPaymasterAndData(
         PackedUserOperation memory op,
         uint48 validUntil,
         uint48 validAfter
     ) internal view returns (bytes memory) {
-        bytes32 reqHash = paymaster.getPaymasterRequestHash(
+        bytes32 reqHash = paymaster.getFinalRequestHash(
             op,
             validUntil,
             validAfter
         );
         bytes32 digest = reqHash.toEthSignedMessageHash();
         bytes memory sig = _sign(digest, OWNER_PK);
+
+        uint128 maxVerificationGas = 500_000;
+        uint128 maxCallGas = 300_000;
+        uint128 maxPreVerificationGas = 100_000;
+        uint128 maxMaxPriorityFeePerGas = 2 gwei;
+        uint128 maxMaxFeePerGas = 2 gwei;
+
         return
-            abi.encodePacked(address(paymaster), validUntil, validAfter, sig);
+            abi.encodePacked(
+                address(paymaster),
+                bytes16(uint128(PM_VERIFICATION_GAS)),
+                bytes16(uint128(PM_POSTOP_GAS)),
+                bytes1(uint8(MODE_FINAL)),
+                bytes6(validUntil),
+                bytes6(validAfter),
+                bytes16(maxVerificationGas),
+                bytes16(maxCallGas),
+                bytes16(maxPreVerificationGas),
+                bytes16(maxMaxPriorityFeePerGas),
+                bytes16(maxMaxFeePerGas),
+                sig
+            );
+    }
+
+    function _estimatePaymasterAndData(
+        PackedUserOperation memory op,
+        uint48 validUntil,
+        uint48 validAfter
+    ) internal view returns (bytes memory) {
+        bytes32 reqHash = paymaster.getEstimateRequestHash(
+            op,
+            validUntil,
+            validAfter
+        );
+        bytes32 digest = reqHash.toEthSignedMessageHash();
+        bytes memory sig = _sign(digest, OWNER_PK);
+
+        return
+            abi.encodePacked(
+                address(paymaster),
+                bytes16(uint128(PM_VERIFICATION_GAS)),
+                bytes16(uint128(PM_POSTOP_GAS)),
+                bytes1(uint8(MODE_ESTIMATE)),
+                bytes6(validUntil),
+                bytes6(validAfter),
+                sig
+            );
     }
 
     function _accountSig(
@@ -233,12 +284,21 @@ contract AA_ContextObs_E2E is Test {
         op.paymasterAndData = "";
         op = _fillGasFields(op);
 
-        bytes32 uoh = _userOpHash(op);
-        op.signature = _accountSig(uoh, 1);
-
         uint48 validUntil = uint48(block.timestamp + 3600);
         uint48 validAfter = uint48(block.timestamp);
-        op.paymasterAndData = _paymasterAndData(op, validUntil, validAfter);
+
+        // まず paymaster request hash 用に signature を空のまま使ってよい
+        op.paymasterAndData = _finalPaymasterAndData(
+            op,
+            validUntil,
+            validAfter
+        );
+
+        // paymasterAndData を含んだ最終 userOpHash を計算
+        bytes32 uoh = _userOpHash(op);
+
+        // その hash に対して account signature を作る
+        op.signature = _accountSig(uoh, 1);
 
         vm.startPrank(address(ep));
         (bytes memory ctx, ) = paymaster.validatePaymasterUserOp(
@@ -248,8 +308,14 @@ contract AA_ContextObs_E2E is Test {
         );
         uint256 vd = account.validateUserOp(op, uoh, 0);
         assertEq(vd, 0);
+
         account.executeFromEntryPoint(laneCreate, address(obs), 0, inner);
-        paymaster.postOp(IPaymasterV07.PostOpMode.opSucceeded, ctx, 0.01 ether);
+        paymaster.postOp(
+            IPaymasterV07.PostOpMode.opSucceeded,
+            ctx,
+            0.01 ether,
+            1 gwei
+        );
         vm.stopPrank();
     }
 
@@ -270,12 +336,21 @@ contract AA_ContextObs_E2E is Test {
         op.paymasterAndData = "";
         op = _fillGasFields(op);
 
-        bytes32 uoh = _userOpHash(op);
-        op.signature = _accountSig(uoh, 1);
-
         uint48 validUntil = uint48(block.timestamp + 3600);
         uint48 validAfter = uint48(block.timestamp);
-        op.paymasterAndData = _paymasterAndData(op, validUntil, validAfter);
+
+        // まず paymaster request hash 用に signature を空のまま使ってよい
+        op.paymasterAndData = _finalPaymasterAndData(
+            op,
+            validUntil,
+            validAfter
+        );
+
+        // paymasterAndData を含んだ最終 userOpHash を計算
+        bytes32 uoh = _userOpHash(op);
+
+        // その hash に対して account signature を作る
+        op.signature = _accountSig(uoh, 1);
 
         vm.startPrank(address(ep));
         (bytes memory ctx, ) = paymaster.validatePaymasterUserOp(
@@ -285,8 +360,14 @@ contract AA_ContextObs_E2E is Test {
         );
         uint256 vd = account.validateUserOp(op, uoh, 0);
         assertEq(vd, 0);
+
         account.executeUserOp(address(obs), 0, inner, fullNonce);
-        paymaster.postOp(IPaymasterV07.PostOpMode.opSucceeded, ctx, 0.01 ether);
+        paymaster.postOp(
+            IPaymasterV07.PostOpMode.opSucceeded,
+            ctx,
+            0.01 ether,
+            1 gwei
+        );
         vm.stopPrank();
     }
 
@@ -304,16 +385,34 @@ contract AA_ContextObs_E2E is Test {
         op.initCode = "";
         op = _fillGasFields(op);
 
-        bytes32 uoh = _userOpHash(op);
-        op.signature = _accountSig(uoh, 1);
-
         uint48 validUntil = uint48(block.timestamp + 3600);
         uint48 validAfter = uint48(block.timestamp);
+
+        uint128 maxVerificationGas = 500_000;
+        uint128 maxCallGas = 300_000;
+        uint128 maxPreVerificationGas = 100_000;
+        uint128 maxMaxPriorityFeePerGas = 2 gwei;
+        uint128 maxMaxFeePerGas = 2 gwei;
+
         op.paymasterAndData = abi.encodePacked(
             address(paymaster),
-            validUntil,
-            validAfter
+            bytes16(uint128(PM_VERIFICATION_GAS)),
+            bytes16(uint128(PM_POSTOP_GAS)),
+            bytes1(uint8(MODE_FINAL)),
+            bytes6(validUntil),
+            bytes6(validAfter),
+            bytes16(maxVerificationGas),
+            bytes16(maxCallGas),
+            bytes16(maxPreVerificationGas),
+            bytes16(maxMaxPriorityFeePerGas),
+            bytes16(maxMaxFeePerGas)
         );
+
+        // paymasterAndData を含んだ最終 userOpHash を計算
+        bytes32 uoh = _userOpHash(op);
+
+        // その hash に対して account signature を作る
+        op.signature = _accountSig(uoh, 1);
 
         vm.prank(address(ep));
         vm.expectRevert();
@@ -330,12 +429,21 @@ contract AA_ContextObs_E2E is Test {
         op.initCode = "";
         op = _fillGasFields(op);
 
-        bytes32 uoh = _userOpHash(op);
-        op.signature = _accountSig(uoh, 1);
-
         uint48 validUntil = uint48(block.timestamp + 3600);
         uint48 validAfter = uint48(block.timestamp);
-        op.paymasterAndData = _paymasterAndData(op, validUntil, validAfter);
+
+        // まず paymaster request hash 用に signature を空のまま使ってよい
+        op.paymasterAndData = _finalPaymasterAndData(
+            op,
+            validUntil,
+            validAfter
+        );
+
+        // paymasterAndData を含んだ最終 userOpHash を計算
+        bytes32 uoh = _userOpHash(op);
+
+        // その hash に対して account signature を作る
+        op.signature = _accountSig(uoh, 1);
 
         vm.startPrank(address(ep));
         vm.expectRevert();
@@ -366,12 +474,21 @@ contract AA_ContextObs_E2E is Test {
         op.paymasterAndData = "";
         op = _fillGasFields(op);
 
-        bytes32 uoh = _userOpHash(op);
-        op.signature = _accountSig(uoh, 1);
-
         uint48 validUntil = uint48(block.timestamp + 3600);
         uint48 validAfter = uint48(block.timestamp);
-        op.paymasterAndData = _paymasterAndData(op, validUntil, validAfter);
+
+        // まず paymaster request hash 用に signature を空のまま使ってよい
+        op.paymasterAndData = _finalPaymasterAndData(
+            op,
+            validUntil,
+            validAfter
+        );
+
+        // paymasterAndData を含んだ最終 userOpHash を計算
+        bytes32 uoh = _userOpHash(op);
+
+        // その hash に対して account signature を作る
+        op.signature = _accountSig(uoh, 1);
 
         vm.startPrank(address(ep));
         vm.expectRevert();
@@ -381,5 +498,48 @@ contract AA_ContextObs_E2E is Test {
             assertTrue(vd != 0);
         } catch {}
         vm.stopPrank();
+    }
+
+    function test_E2E_estimate_mode_validate_only() public {
+        bytes memory inner = abi.encodeWithSignature(
+            "createContext(bytes32,string)",
+            keccak256("ctx-estimate"),
+            "ipfs://cid-estimate"
+        );
+
+        PackedUserOperation memory op;
+        op.sender = address(account);
+        op.nonce = _nonce(laneCreate, 0);
+        op.initCode = "";
+        op.callData = _buildOuterExecuteFrom(laneCreate, inner);
+        op.signature = "";
+        op.paymasterAndData = "";
+        op = _fillGasFields(op);
+
+        uint48 validUntil = uint48(block.timestamp + 3600);
+        uint48 validAfter = uint48(block.timestamp);
+
+        op.paymasterAndData = _estimatePaymasterAndData(
+            op,
+            validUntil,
+            validAfter
+        );
+
+        // paymasterAndData を含んだ最終 userOpHash を計算
+        bytes32 uoh = _userOpHash(op);
+
+        // その hash に対して account signature を作る
+        op.signature = _accountSig(uoh, 1);
+
+        vm.prank(address(ep));
+        (bytes memory ctx, uint256 pmValidationData) = paymaster
+            .validatePaymasterUserOp(op, uoh, 0.02 ether);
+
+        assertEq(ctx.length, 0);
+        assertTrue(pmValidationData != 0);
+
+        vm.prank(address(ep));
+        uint256 vd = account.validateUserOp(op, uoh, 0);
+        assertEq(vd, 0);
     }
 }
