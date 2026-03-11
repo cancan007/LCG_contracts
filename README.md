@@ -1,6 +1,8 @@
-# Context Observatory
+# Context Observatory(R&D) + DDD-like Account Abstraction PR
 
 _A Modular Account Abstraction Experiment for Contextual Economics_
+
+This repository contains an experimental **Account Abstraction + Passkey + Paymaster** flow and a frontend prototype that was verified on **OP Sepolia**.
 
 ---
 
@@ -10,6 +12,8 @@ _A Modular Account Abstraction Experiment for Contextual Economics_
 
 - **R&D / Context Observatory (thesis + DApp):** `README_RND.md`
 - **AA / Aggregators / laneKey architecture:** `README_AA.md` (if present)
+  - Practical dev memo on which things I encountered during implementation AA.
+    - [`practical_dev_memo_en.md`](./practical_dev_memo_en.md)
 
 ### Conceptual Background (R&D)
 

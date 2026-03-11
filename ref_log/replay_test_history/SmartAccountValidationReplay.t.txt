@@ -1,0 +1,260 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.24;
+
+import "forge-std/Test.sol";
+import "forge-std/StdJson.sol";
+
+interface IEntryPointLike {
+    struct PackedUserOperation {
+        address sender;
+        uint256 nonce;
+        bytes initCode;
+        bytes callData;
+        bytes32 accountGasLimits;
+        uint256 preVerificationGas;
+        bytes32 gasFees;
+        bytes paymasterAndData;
+        bytes signature;
+    }
+
+    function getUserOpHash(
+        PackedUserOperation calldata userOp
+    ) external view returns (bytes32);
+}
+
+interface ISmartAccountLike {
+    struct LaneConfig {
+        address validator;
+        address validationHook;
+        address executor;
+        address execHook;
+    }
+
+    function owner() external view returns (address);
+
+    function getLaneConfig(
+        uint192 laneKey
+    ) external view returns (LaneConfig memory);
+
+    function validateUserOp(
+        IEntryPointLike.PackedUserOperation calldata userOp,
+        bytes32 userOpHash,
+        uint256 missingAccountFunds
+    ) external returns (uint256 validationData);
+}
+
+interface IValidatorAggregatorLike {
+    function getCurrentValidators() external view returns (address[] memory);
+    function getActiveValidators() external view returns (address[] memory);
+
+    function validateUserOp(
+        IEntryPointLike.PackedUserOperation calldata userOp,
+        bytes32 userOpHash
+    ) external returns (uint256 validationData);
+}
+
+interface IPasskeyValidatorLike {
+    function validateUserOp(
+        IEntryPointLike.PackedUserOperation calldata userOp,
+        bytes32 userOpHash
+    ) external returns (uint256 validationData);
+}
+
+contract SmartAccountValidationReplayTest is Test {
+    using stdJson for string;
+
+    address entryPoint;
+    address smartAccount;
+    uint192 laneKey;
+
+    function setUp() external {
+        string memory rpc = vm.envString("RPC_URL");
+        uint256 forkId = vm.createFork(rpc);
+        vm.selectFork(forkId);
+
+        // .env に入れるか、直書きしてもOK
+        entryPoint = vm.envAddress("ENTRYPOINT_ADDRESS");
+        smartAccount = vm.envAddress("SMART_ACCOUNT_ADDRESS");
+        laneKey = uint192(vm.envUint("LANE_KEY"));
+    }
+
+    function _packAccountGasLimits(
+        uint256 verificationGasLimit,
+        uint256 callGasLimit
+    ) internal pure returns (bytes32) {
+        return bytes32((verificationGasLimit << 128) | callGasLimit);
+    }
+
+    function _packGasFees(
+        uint256 maxPriorityFeePerGas,
+        uint256 maxFeePerGas
+    ) internal pure returns (bytes32) {
+        return bytes32((maxPriorityFeePerGas << 128) | maxFeePerGas);
+    }
+
+    function _buildPaymasterAndData(
+        address paymaster,
+        uint256 paymasterVerificationGasLimit,
+        uint256 paymasterPostOpGasLimit,
+        bytes memory paymasterData
+    ) internal pure returns (bytes memory) {
+        return
+            abi.encodePacked(
+                paymaster,
+                bytes16(uint128(paymasterVerificationGasLimit)),
+                bytes16(uint128(paymasterPostOpGasLimit)),
+                paymasterData
+            );
+    }
+
+    function _loadUserOpFromJson(
+        string memory path
+    ) internal view returns (IEntryPointLike.PackedUserOperation memory uo) {
+        string memory json = vm.readFile(path);
+
+        address sender = json.readAddress(".rpcUserOp.sender");
+        uint256 nonce = vm.parseUint(json.readString(".rpcUserOp.nonce"));
+        bytes memory callData = vm.parseBytes(
+            json.readString(".rpcUserOp.callData")
+        );
+
+        uint256 callGasLimit = vm.parseUint(
+            json.readString(".rpcUserOp.callGasLimit")
+        );
+        uint256 verificationGasLimit = vm.parseUint(
+            json.readString(".rpcUserOp.verificationGasLimit")
+        );
+        uint256 preVerificationGas = vm.parseUint(
+            json.readString(".rpcUserOp.preVerificationGas")
+        );
+
+        uint256 maxFeePerGas = vm.parseUint(
+            json.readString(".rpcUserOp.maxFeePerGas")
+        );
+        uint256 maxPriorityFeePerGas = vm.parseUint(
+            json.readString(".rpcUserOp.maxPriorityFeePerGas")
+        );
+
+        address paymaster = json.readAddress(".rpcUserOp.paymaster");
+        uint256 paymasterVerificationGasLimit = vm.parseUint(
+            json.readString(".rpcUserOp.paymasterVerificationGasLimit")
+        );
+        uint256 paymasterPostOpGasLimit = vm.parseUint(
+            json.readString(".rpcUserOp.paymasterPostOpGasLimit")
+        );
+
+        bytes memory paymasterData = vm.parseBytes(
+            json.readString(".rpcUserOp.paymasterData")
+        );
+        bytes memory signature = vm.parseBytes(
+            json.readString(".rpcUserOp.signature")
+        );
+
+        uo = IEntryPointLike.PackedUserOperation({
+            sender: sender,
+            nonce: nonce,
+            initCode: bytes(""),
+            callData: callData,
+            accountGasLimits: _packAccountGasLimits(
+                verificationGasLimit,
+                callGasLimit
+            ),
+            preVerificationGas: preVerificationGas,
+            gasFees: _packGasFees(maxPriorityFeePerGas, maxFeePerGas),
+            paymasterAndData: _buildPaymasterAndData(
+                paymaster,
+                paymasterVerificationGasLimit,
+                paymasterPostOpGasLimit,
+                paymasterData
+            ),
+            signature: signature
+        });
+    }
+
+    function test_replay_smart_account_validation() external {
+        IEntryPointLike.PackedUserOperation memory uo = _loadUserOpFromJson(
+            "test/fixtures/aa-estimate-payload_sig.json"
+        );
+
+        assertEq(
+            uo.sender,
+            smartAccount,
+            "fixture sender != configured smartAccount"
+        );
+        assertGt(smartAccount.code.length, 0, "smart account has no code");
+        assertGt(entryPoint.code.length, 0, "entrypoint has no code");
+
+        bytes32 userOpHash = IEntryPointLike(entryPoint).getUserOpHash(uo);
+
+        emit log_named_bytes32("userOpHash", userOpHash);
+        emit log_named_address("smartAccount", smartAccount);
+        emit log_named_address(
+            "owner",
+            ISmartAccountLike(smartAccount).owner()
+        );
+
+        ISmartAccountLike.LaneConfig memory cfg = ISmartAccountLike(
+            smartAccount
+        ).getLaneConfig(laneKey);
+
+        emit log_named_uint("laneKey", uint256(laneKey));
+        emit log_named_address("validator", cfg.validator);
+        emit log_named_address("validationHook", cfg.validationHook);
+        emit log_named_address("executor", cfg.executor);
+        emit log_named_address("execHook", cfg.execHook);
+
+        // 1) validator を直接叩く
+        vm.recordLogs();
+        try
+            IValidatorAggregatorLike(cfg.validator).validateUserOp(
+                uo,
+                userOpHash
+            )
+        returns (uint256 vd1) {
+            emit log_named_uint("validator.validateUserOp validationData", vd1);
+        } catch (bytes memory err1) {
+            emit log_named_bytes("validator.validateUserOp revert", err1);
+        }
+
+        // 2) smart account 本体を叩く
+        // validateUserOp は EntryPoint からしか呼べない実装が多いので prank を付ける
+        vm.recordLogs();
+        vm.prank(entryPoint);
+        try
+            ISmartAccountLike(smartAccount).validateUserOp(uo, userOpHash, 0)
+        returns (uint256 vd2) {
+            emit log_named_uint(
+                "smartAccount.validateUserOp validationData",
+                vd2
+            );
+        } catch (bytes memory err2) {
+            emit log_named_bytes("smartAccount.validateUserOp revert", err2);
+        }
+    }
+
+    function test_inspect_validator_members() external {
+        ISmartAccountLike.LaneConfig memory cfg = ISmartAccountLike(
+            smartAccount
+        ).getLaneConfig(laneKey);
+
+        emit log_named_address("validator", cfg.validator);
+
+        try
+            IValidatorAggregatorLike(cfg.validator).getCurrentValidators()
+        returns (address[] memory vals1) {
+            emit log_named_uint("getCurrentValidators.length", vals1.length);
+            for (uint256 i = 0; i < vals1.length; i++) {
+                emit log_named_address("currentValidator", vals1[i]);
+            }
+        } catch {}
+
+        try
+            IValidatorAggregatorLike(cfg.validator).getActiveValidators()
+        returns (address[] memory vals2) {
+            emit log_named_uint("getActiveValidators.length", vals2.length);
+            for (uint256 i = 0; i < vals2.length; i++) {
+                emit log_named_address("activeValidator", vals2[i]);
+            }
+        } catch {}
+    }
+}

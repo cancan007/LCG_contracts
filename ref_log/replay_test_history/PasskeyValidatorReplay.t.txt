@@ -1,0 +1,511 @@
+// SPDX-License-Identifier: UNLICENSED
+pragma solidity ^0.8.24;
+
+import "forge-std/Test.sol";
+import "forge-std/StdJson.sol";
+
+interface IEntryPointLike {
+    struct PackedUserOperation {
+        address sender;
+        uint256 nonce;
+        bytes initCode;
+        bytes callData;
+        bytes32 accountGasLimits;
+        uint256 preVerificationGas;
+        bytes32 gasFees;
+        bytes paymasterAndData;
+        bytes signature;
+    }
+
+    function getUserOpHash(
+        PackedUserOperation calldata userOp
+    ) external view returns (bytes32);
+}
+
+interface ISmartAccountLike {
+    struct LaneConfig {
+        address validator;
+        address validationHook;
+        address executor;
+        address execHook;
+    }
+
+    function getLaneConfig(
+        uint192 laneKey
+    ) external view returns (LaneConfig memory);
+
+    function owner() external view returns (address);
+    function validateUserOp(
+        IEntryPointLike.PackedUserOperation calldata userOp,
+        bytes32 userOpHash,
+        uint256 missingAccountFunds
+    ) external returns (uint256);
+}
+
+interface IValidatorAggregatorLike {
+    function getCurrentValidators() external view returns (address[] memory);
+    function getActiveValidators() external view returns (address[] memory);
+    function validateUserOp(
+        IEntryPointLike.PackedUserOperation calldata userOp,
+        bytes32 userOpHash
+    ) external returns (uint256);
+}
+
+interface IPasskeyValidatorLike {
+    function validateUserOp(
+        IEntryPointLike.PackedUserOperation calldata userOp,
+        bytes32 userOpHash
+    ) external returns (uint256 validationData);
+}
+
+interface IContextObservatoryLaneValidatorLike {
+    function validateUserOp(
+        IEntryPointLike.PackedUserOperation calldata userOp,
+        bytes32 userOpHash
+    ) external returns (uint256 validationData);
+}
+
+interface IPasskeyValidatorDebugLike {
+    // function debugValidateUserOp(
+    //     address sender,
+    //     IEntryPointLike.PackedUserOperation calldata userOp,
+    //     bytes32 userOpHash
+    // )
+    //     external
+    //     view
+    //     returns (
+    //         bytes32 expectedChallenge,
+    //         bytes32 extractedCredHash,
+    //         bytes memory authenticatorData,
+    //         string memory clientDataJSON,
+    //         uint256 sigLength,
+    //         bool verifyOk
+    //     );
+
+    function debugValidateUserOp(
+        address account,
+        IEntryPointLike.PackedUserOperation calldata userOp,
+        bytes32 userOpHash
+    )
+        external
+        view
+        returns (
+            uint256 pubKeyX,
+            uint256 pubKeyY,
+            bool requireUV,
+            bytes memory authenticatorData,
+            string memory clientDataJSON,
+            uint256 sigLength,
+            bytes32 expectedChallenge,
+            bytes32 extractedCredIdHash,
+            bytes32 storedCredIdHash,
+            bytes32 extractedRpIdHash,
+            bytes32 storedRpIdHash,
+            bool verifyOk,
+            bool credHashMatches,
+            bool finalOk
+        );
+}
+
+interface IEntryPointSimLike {
+    struct PackedUserOperation {
+        address sender;
+        uint256 nonce;
+        bytes initCode;
+        bytes callData;
+        bytes32 accountGasLimits;
+        uint256 preVerificationGas;
+        bytes32 gasFees;
+        bytes paymasterAndData;
+        bytes signature;
+    }
+
+    function simulateValidation(PackedUserOperation calldata userOp) external;
+}
+
+contract PasskeyValidatorReplayTest is Test {
+    using stdJson for string;
+
+    address entryPoint;
+    address smartAccount;
+    uint192 laneKey;
+
+    function setUp() external {
+        string memory rpc = vm.envString("RPC_URL");
+        uint256 forkId = vm.createFork(rpc);
+        vm.selectFork(forkId);
+
+        entryPoint = vm.envAddress("ENTRYPOINT_ADDRESS");
+        smartAccount = vm.envAddress("SMART_ACCOUNT_ADDRESS");
+        laneKey = uint192(vm.envUint("LANE_KEY"));
+    }
+
+    function _packAccountGasLimits(
+        uint256 verificationGasLimit,
+        uint256 callGasLimit
+    ) internal pure returns (bytes32) {
+        return bytes32((verificationGasLimit << 128) | callGasLimit);
+    }
+
+    function _packGasFees(
+        uint256 maxPriorityFeePerGas,
+        uint256 maxFeePerGas
+    ) internal pure returns (bytes32) {
+        return bytes32((maxPriorityFeePerGas << 128) | maxFeePerGas);
+    }
+
+    function _buildPaymasterAndData(
+        address paymasterAddr,
+        uint256 paymasterVerificationGasLimit,
+        uint256 paymasterPostOpGasLimit,
+        bytes memory paymasterData
+    ) internal pure returns (bytes memory) {
+        return
+            abi.encodePacked(
+                paymasterAddr,
+                bytes16(uint128(paymasterVerificationGasLimit)),
+                bytes16(uint128(paymasterPostOpGasLimit)),
+                paymasterData
+            );
+    }
+
+    function _loadUserOpFromJson(
+        string memory path
+    ) internal view returns (IEntryPointLike.PackedUserOperation memory uo) {
+        string memory json = vm.readFile(path);
+
+        address sender = json.readAddress(".rpcUserOp.sender");
+        uint256 nonce = vm.parseUint(json.readString(".rpcUserOp.nonce"));
+        bytes memory callData = vm.parseBytes(
+            json.readString(".rpcUserOp.callData")
+        );
+
+        uint256 callGasLimit = vm.parseUint(
+            json.readString(".rpcUserOp.callGasLimit")
+        );
+        uint256 verificationGasLimit = vm.parseUint(
+            json.readString(".rpcUserOp.verificationGasLimit")
+        );
+        uint256 preVerificationGas = vm.parseUint(
+            json.readString(".rpcUserOp.preVerificationGas")
+        );
+
+        uint256 maxFeePerGas = vm.parseUint(
+            json.readString(".rpcUserOp.maxFeePerGas")
+        );
+        uint256 maxPriorityFeePerGas = vm.parseUint(
+            json.readString(".rpcUserOp.maxPriorityFeePerGas")
+        );
+
+        address paymasterAddr = json.readAddress(".rpcUserOp.paymaster");
+        uint256 paymasterVerificationGasLimit = vm.parseUint(
+            json.readString(".rpcUserOp.paymasterVerificationGasLimit")
+        );
+        uint256 paymasterPostOpGasLimit = vm.parseUint(
+            json.readString(".rpcUserOp.paymasterPostOpGasLimit")
+        );
+
+        bytes memory paymasterData = vm.parseBytes(
+            json.readString(".rpcUserOp.paymasterData")
+        );
+        bytes memory signature = vm.parseBytes(
+            json.readString(".rpcUserOp.signature")
+        );
+
+        uo = IEntryPointLike.PackedUserOperation({
+            sender: sender,
+            nonce: nonce,
+            initCode: bytes(""),
+            callData: callData,
+            accountGasLimits: _packAccountGasLimits(
+                verificationGasLimit,
+                callGasLimit
+            ),
+            preVerificationGas: preVerificationGas,
+            gasFees: _packGasFees(maxPriorityFeePerGas, maxFeePerGas),
+            paymasterAndData: _buildPaymasterAndData(
+                paymasterAddr,
+                paymasterVerificationGasLimit,
+                paymasterPostOpGasLimit,
+                paymasterData
+            ),
+            signature: signature
+        });
+    }
+
+    function test_replay_passkey_validator_only() external {
+        IEntryPointLike.PackedUserOperation memory uo = _loadUserOpFromJson(
+            "test/fixtures/aa-estimate-payload_pass.json"
+        );
+
+        bytes32 userOpHash = IEntryPointLike(entryPoint).getUserOpHash(uo);
+
+        ISmartAccountLike.LaneConfig memory cfg = ISmartAccountLike(
+            smartAccount
+        ).getLaneConfig(laneKey);
+
+        emit log_named_bytes32("userOpHash", userOpHash);
+        emit log_named_address("smartAccount", smartAccount);
+        emit log_named_address(
+            "owner",
+            ISmartAccountLike(smartAccount).owner()
+        );
+        emit log_named_uint("laneKey", uint256(laneKey));
+        emit log_named_address("validator(aggregator)", cfg.validator);
+
+        address[] memory vals = IValidatorAggregatorLike(cfg.validator)
+            .getCurrentValidators();
+        emit log_named_uint("validator count", vals.length);
+        for (uint256 i = 0; i < vals.length; i++) {
+            emit log_named_address("child validator", vals[i]);
+        }
+
+        require(vals.length >= 2, "expected at least 2 validators");
+
+        address passkeyValidator = vals[0];
+        address laneValidator = vals[1];
+
+        emit log_named_address("passkeyValidator", passkeyValidator);
+        emit log_named_address("laneValidator", laneValidator);
+
+        uint256 passkeyVd;
+        uint256 laneVd;
+
+        try
+            IPasskeyValidatorLike(passkeyValidator).validateUserOp(
+                uo,
+                userOpHash
+            )
+        returns (uint256 vd1) {
+            passkeyVd = vd1;
+            emit log_named_uint("passkeyValidator validationData", vd1);
+        } catch (bytes memory err1) {
+            emit log_named_bytes("passkeyValidator revert", err1);
+            revert("passkeyValidator reverted");
+        }
+
+        try
+            IContextObservatoryLaneValidatorLike(laneValidator).validateUserOp(
+                uo,
+                userOpHash
+            )
+        returns (uint256 vd2) {
+            laneVd = vd2;
+            emit log_named_uint("laneValidator validationData", vd2);
+        } catch (bytes memory err2) {
+            emit log_named_bytes("laneValidator revert", err2);
+            revert("laneValidator reverted");
+        }
+
+        // 観察用。最初は assert を弱めにしてログ優先でOK
+        emit log_named_uint("passkey failed?", passkeyVd == 1 ? 1 : 0);
+        emit log_named_uint("lane failed?", laneVd == 1 ? 1 : 0);
+    }
+
+    function test_debug_passkey_validator() external {
+        IEntryPointLike.PackedUserOperation memory uo = _loadUserOpFromJson(
+            "test/fixtures/aa-estimate-payload_pass.json"
+        );
+
+        bytes32 userOpHash = IEntryPointLike(entryPoint).getUserOpHash(uo);
+
+        ISmartAccountLike.LaneConfig memory cfg = ISmartAccountLike(
+            smartAccount
+        ).getLaneConfig(laneKey);
+
+        address[] memory vals = IValidatorAggregatorLike(cfg.validator)
+            .getCurrentValidators();
+
+        require(vals.length >= 1, "expected at least 1 validator");
+
+        address passkeyValidator = vals[0];
+
+        // (
+        //     bytes32 expectedChallenge,
+        //     bytes32 extractedCredHash,
+        //     bytes memory authenticatorData,
+        //     string memory clientDataJSON,
+        //     uint256 sigLength,
+        //     bool verifyOk
+        // ) = IPasskeyValidatorDebugLike(passkeyValidator).debugValidateUserOp(
+        //         smartAccount,
+        //         uo,
+        //         userOpHash
+        //     );
+
+        (
+            uint256 pubKeyX,
+            uint256 pubKeyY,
+            bool requireUV,
+            bytes memory authenticatorData,
+            string memory clientDataJSON,
+            uint256 sigLength,
+            bytes32 expectedChallenge,
+            bytes32 extractedCredIdHash,
+            bytes32 storedCredHash,
+            bytes32 extractedRpIdHash,
+            bytes32 storedRpIdHash,
+            bool verifyOk,
+            bool matcher,
+            bool finaler
+        ) = IPasskeyValidatorDebugLike(passkeyValidator).debugValidateUserOp(
+                smartAccount,
+                uo,
+                userOpHash
+            );
+
+        emit log_named_uint("pubKeyX", pubKeyX);
+        emit log_named_uint("pubKeyY", pubKeyY);
+        emit log_named_uint("requireUV", requireUV ? 1 : 0);
+        emit log_named_bytes32("userOpHash", userOpHash);
+        emit log_named_bytes32("expectedChallenge", expectedChallenge);
+        emit log_named_bytes32("extractedCredIdHash", extractedCredIdHash);
+        emit log_named_bytes32("storedCredHash", storedCredHash);
+        emit log_named_bytes32("extractedRpIdHash", extractedRpIdHash);
+        emit log_named_bytes32("storedRpIdHash", storedRpIdHash);
+        emit log_named_uint("sigLength", sigLength);
+        emit log_named_bytes("authenticatorData", authenticatorData);
+        emit log_named_string("clientDataJSON", clientDataJSON);
+        emit log_named_uint("verifyOk", verifyOk ? 1 : 0);
+        emit log_named_uint("matcher", matcher ? 1 : 0);
+        emit log_named_uint("finaler", finaler ? 1 : 0);
+    }
+
+    function test_replay_lane_validator_only() external {
+        IEntryPointLike.PackedUserOperation memory uo = _loadUserOpFromJson(
+            "test/fixtures/aa-estimate-payload_pass.json"
+        );
+
+        bytes32 userOpHash = IEntryPointLike(entryPoint).getUserOpHash(uo);
+        address smartAccountFromFixture = uo.sender;
+
+        ISmartAccountLike.LaneConfig memory cfg = ISmartAccountLike(
+            smartAccountFromFixture
+        ).getLaneConfig(laneKey);
+
+        address[] memory vals = IValidatorAggregatorLike(cfg.validator)
+            .getCurrentValidators();
+
+        address laneValidator = vals[1];
+
+        emit log_named_address("smartAccount", smartAccountFromFixture);
+        emit log_named_address("laneValidator", laneValidator);
+        emit log_named_bytes32("userOpHash", userOpHash);
+
+        try
+            IContextObservatoryLaneValidatorLike(laneValidator).validateUserOp(
+                uo,
+                userOpHash
+            )
+        returns (uint256 vd) {
+            emit log_named_uint("laneValidator validationData", vd);
+        } catch (bytes memory err) {
+            emit log_named_bytes("laneValidator revert", err);
+        }
+    }
+
+    function test_replay_aggregator_only() external {
+        IEntryPointLike.PackedUserOperation memory uo = _loadUserOpFromJson(
+            "test/fixtures/aa-estimate-payload_pass.json"
+        );
+
+        bytes32 userOpHash = IEntryPointLike(entryPoint).getUserOpHash(uo);
+        address smartAccountFromFixture = uo.sender;
+
+        ISmartAccountLike.LaneConfig memory cfg = ISmartAccountLike(
+            smartAccountFromFixture
+        ).getLaneConfig(laneKey);
+
+        emit log_named_address("smartAccount", smartAccountFromFixture);
+        emit log_named_address("aggregator", cfg.validator);
+        emit log_named_bytes32("userOpHash", userOpHash);
+
+        try
+            IValidatorAggregatorLike(cfg.validator).validateUserOp(
+                uo,
+                userOpHash
+            )
+        returns (uint256 vd) {
+            emit log_named_uint("aggregator validationData", vd);
+        } catch (bytes memory err) {
+            emit log_named_bytes("aggregator revert", err);
+        }
+    }
+
+    function test_replay_smart_account_only() external {
+        IEntryPointLike.PackedUserOperation memory uo = _loadUserOpFromJson(
+            "test/fixtures/aa-estimate-payload_pass.json"
+        );
+
+        bytes32 userOpHash = IEntryPointLike(entryPoint).getUserOpHash(uo);
+        address smartAccountFromFixture = uo.sender;
+
+        emit log_named_address("smartAccount", smartAccountFromFixture);
+        emit log_named_bytes32("userOpHash", userOpHash);
+
+        vm.prank(entryPoint);
+        try
+            ISmartAccountLike(smartAccountFromFixture).validateUserOp(
+                uo,
+                userOpHash,
+                0
+            )
+        returns (uint256 vd) {
+            emit log_named_uint("smartAccount validationData", vd);
+        } catch (bytes memory err) {
+            emit log_named_bytes("smartAccount revert", err);
+        }
+    }
+
+    function test_replay_entrypoint_simulate_validation() external {
+        IEntryPointLike.PackedUserOperation memory uo = _loadUserOpFromJson(
+            "test/fixtures/aa-estimate-payload_pass.json"
+        );
+
+        IEntryPointSimLike.PackedUserOperation memory simUo = IEntryPointSimLike
+            .PackedUserOperation({
+                sender: uo.sender,
+                nonce: uo.nonce,
+                initCode: uo.initCode,
+                callData: uo.callData,
+                accountGasLimits: uo.accountGasLimits,
+                preVerificationGas: uo.preVerificationGas,
+                gasFees: uo.gasFees,
+                paymasterAndData: uo.paymasterAndData,
+                signature: uo.signature
+            });
+
+        try IEntryPointSimLike(entryPoint).simulateValidation(simUo) {
+            emit log("simulateValidation succeeded");
+        } catch (bytes memory err) {
+            emit log_named_bytes("simulateValidation revert", err);
+        }
+    }
+
+    function test_replay_entrypoint_simulate_validation_raw() external {
+        IEntryPointLike.PackedUserOperation memory uo = _loadUserOpFromJson(
+            "test/fixtures/aa-estimate-payload_pass.json"
+        );
+
+        bytes memory callData = abi.encodeWithSignature(
+            "simulateValidation((address,uint256,bytes,bytes,bytes32,uint256,bytes32,bytes,bytes))",
+            uo
+        );
+
+        (bool ok, bytes memory ret) = entryPoint.call(callData);
+
+        emit log_named_uint("call success", ok ? 1 : 0);
+        emit log_named_uint("ret length", ret.length);
+
+        if (ret.length >= 4) {
+            bytes4 sel;
+            assembly {
+                sel := mload(add(ret, 32))
+            }
+            emit log_named_bytes32("revert selector", bytes32(sel));
+            emit log_named_bytes("raw revert data", ret);
+        } else {
+            emit log_named_bytes("raw revert data", ret);
+        }
+    }
+}

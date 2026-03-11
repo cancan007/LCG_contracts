@@ -13,6 +13,35 @@ If you are here for the R&D thesis (“movement of meaning”), see `README_RND.
 - Domain variability lives in **modules**, composed through **aggregators**.
 - **New addition:** aggregators now support **version-tagged module sets** so upgrades/rollback are ops-friendly and auditable.
 - A key implementation point is that `AccountFactory` manages laneKey-specific shared aggregator modules, so creating a new SmartAccount does not require manual per-lane wiring by the user.
+- **Verified update:** the frontend-connected AA flow was confirmed on **OP Sepolia** from **estimate to execute** using passkey + paymaster + bundler.
+
+---
+
+## Verified on OP Sepolia from frontend
+
+This architecture is not only conceptual.  
+A frontend-connected AA flow was verified on **OP Sepolia** with:
+
+- `eth_estimateUserOperationGas`
+- final passkey signing
+- `eth_sendUserOperation`
+- successful contract execution
+
+Confirmed execution path:
+
+**frontend → estimate → final sign → send → execute**
+
+The verified stack was:
+
+- **ERC-4337 v0.7**
+- **Pimlico bundler**
+- **Passkey / WebAuthn**
+- **ContextObservatoryPaymaster**
+- **laneKey-based validator composition**
+- **SmartAccount-based execution**
+
+This matters because it shows that the design is not merely an R&D proposal:  
+the AA path was validated end-to-end in a live testnet environment.
 
 ---
 
@@ -155,7 +184,7 @@ So the lane can be selected purely by how you encode `data` (no new params).
 
 > Tip: For UserOps, bind execution to validation by using `executeUserOp(..., fullNonce)` and enforcing `fullNonce == userOp.nonce` in a validation hook (e.g. `NonceBoundCallDataValidationHook`).
 
---
+---
 
 ## Toward Meaning-Aware Validation
 
@@ -279,6 +308,47 @@ This means that user-side account creation becomes much simpler:
 
 This keeps user-specific data local, while keeping operational composition in developer-controlled shared infrastructure.
 
+## Final stable sending flow
+
+The final stable flow separates **estimate** and **final send**.
+
+### 1. Estimate phase
+
+Build an estimate UserOperation for:
+
+- `eth_estimateUserOperationGas`
+- dummy passkey signature with the correct ABI shape
+- paymaster in **MODE_ESTIMATE**
+
+At this stage, the goal is to pass validation and obtain gas values safely.
+
+### 2. Final send phase
+
+After estimation:
+
+- rebuild the final UserOperation
+- attach final paymaster authorization
+- attach the real passkey signature
+- call `eth_sendUserOperation`
+
+The final send uses **MODE_FINAL** and enforces gas risk via **caps**, rather than strict gas hashing.
+
+### 3. Frontend-side safety check
+
+Before sending, the frontend performs a roundtrip decode of the generated passkey signature and verifies that:
+
+- `credHash`
+- `authenticatorData`
+- `clientDataJSON`
+- `challengeIndex`
+- `typeIndex`
+- `r`
+- `s`
+
+match the expected structure.
+
+This significantly reduced failures caused by ABI-shape mismatches before cryptographic verification.
+
 ## ContextObservatory (ERC-4337 Paymaster, owner-signed, dual execution)
 
 We sponsor gas for **ContextObservatory** operations via an **ERC-4337 v0.7 Paymaster**, and we require an **owner signature** so that third parties cannot burn a user’s sponsored balance by submitting arbitrary UserOps.
@@ -382,6 +452,53 @@ The deploy script can emit sample outer calldata for both paths:
 
 - `USE_EXECUTE_USEROP=true` → emit `executeUserOp(...)` outer calldata
 - default (`false`) → emit `executeFromEntryPoint(...)` outer calldata
+
+## What made the OP Sepolia flow stable with Pimlico bundler
+
+Several implementation fixes were necessary before the flow became stable on OP Sepolia.
+
+### 1. Split paymaster behavior into estimate / final modes
+
+The paymaster was split into:
+
+- `MODE_ESTIMATE`
+- `MODE_FINAL`
+
+This was necessary because estimation and production send require different guarantees.
+
+### 2. Removed gas fields from the final paymaster signature hash
+
+Strictly hashing gas-related fields made signatures fragile against bundler-side differences.
+
+Instead of strict equality on gas packing, the final flow now uses **gas caps** for bounded risk.
+
+### 3. Enforced gas via caps
+
+The final mode checks upper bounds for:
+
+- verification gas
+- call gas
+- preVerificationGas
+- priority fee
+- max fee
+
+This made authorization more robust while still keeping risk controlled.
+
+### 4. Fixed passkey signature ABI shape
+
+A major blocker was ABI mismatch between frontend-encoded passkey signatures and Solidity-side decoding.
+
+The successful flow depends on using the exact ABI shape expected by the validator and keeping the estimate dummy signature aligned with the same format.
+
+**estimate → final sign → send → execute**
+
+flow on OP Sepolia.
+
+### 5. Added a verificationGasLimit floor
+
+Bundler-estimated verification gas alone was sometimes insufficient for real WebAuthn verification.
+
+A floor was therefore applied for final send stability.
 
 ---
 
