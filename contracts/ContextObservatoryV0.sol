@@ -84,7 +84,7 @@ contract ContextObservatoryV0 {
     // Context registry (optional)
     uint256 public nextContextId = 1;
     mapping(uint256 => address) public contextCreator;
-    mapping(uint256 => bytes32) public contextContentHash;
+    mapping(uint256 => bytes32) public contextContentHash; //NOTE: To verify whether the content is changed or not after `createContext` called
     mapping(uint256 => string) public contextURI;
 
     // Declarations
