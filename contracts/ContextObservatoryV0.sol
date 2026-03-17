@@ -259,7 +259,7 @@ contract ContextObservatoryV0 {
         return eff;
     }
 
-    function _allowedPosts(address user) internal view returns (uint32) {
+    function allowedPosts(address user) public view returns (uint32) {
         if (!useStakeGating) return basePostLimit;
 
         // 0.01 ETH per 1 extra post (same as before, but only effective stake counts)
@@ -320,10 +320,7 @@ contract ContextObservatoryV0 {
         string calldata memoURI
     ) external returns (uint256 declarationId, bytes32 commitHash) {
         require(spanEnd >= spanStart, "bad span");
-        require(
-            postsUsed[msg.sender] < _allowedPosts(msg.sender),
-            "post limit"
-        );
+        require(postsUsed[msg.sender] < allowedPosts(msg.sender), "post limit");
 
         // AUTHOR_ONLY: keep minimal signal (user -> author), reduce noise.
         if (relationMode == RelationMode.AUTHOR_ONLY) {

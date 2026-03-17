@@ -101,6 +101,8 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
     uint192 public immutable laneCreate;
     uint192 public immutable laneCommit;
     uint192 public immutable laneRedeem;
+    uint192 public immutable laneDeposit;
+    uint192 public immutable laneWithdraw;
 
     // allowed selectors
     bytes4 public constant SEL_CREATE =
@@ -113,6 +115,10 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
         );
     bytes4 public constant SEL_REDEEM =
         bytes4(keccak256("redeem(uint256,uint256,string,string,bytes32[])"));
+    bytes4 public constant SEL_DEPOSIT = bytes4(keccak256("depositStake()"));
+
+    bytes4 public constant SEL_WITHDRAW =
+        bytes4(keccak256("withdrawStake(uint256)"));
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -143,6 +149,16 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
             industry,
             service,
             "internal/redeem"
+        );
+        laneDeposit = LaneKeyNaming.laneKey(
+            industry,
+            service,
+            "internal/depositStake"
+        );
+        laneWithdraw = LaneKeyNaming.laneKey(
+            industry,
+            service,
+            "internal/withdrawStake"
         );
     }
 
@@ -207,6 +223,10 @@ contract ContextObservatoryPaymaster is IPaymasterV07 {
             if (laneKey != laneCommit) revert NotAllowedCall();
         } else if (selector == SEL_REDEEM) {
             if (laneKey != laneRedeem) revert NotAllowedCall();
+        } else if (selector == SEL_DEPOSIT) {
+            if (laneKey != laneDeposit) revert NotAllowedCall();
+        } else if (selector == SEL_WITHDRAW) {
+            if (laneKey != laneWithdraw) revert NotAllowedCall();
         } else {
             revert NotAllowedCall();
         }

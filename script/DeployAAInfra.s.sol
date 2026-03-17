@@ -59,6 +59,16 @@ contract DeployAAInfra is Script {
             service,
             "internal/redeem"
         );
+        uint192 laneDeposit = LaneKeyNaming.laneKey(
+            industry,
+            service,
+            "internal/depositStake"
+        );
+        uint192 laneWithdraw = LaneKeyNaming.laneKey(
+            industry,
+            service,
+            "internal/withdrawStake"
+        );
 
         bytes4 selCreate = bytes4(keccak256("createContext(bytes32,string)"));
         bytes4 selCommit = bytes4(
@@ -69,6 +79,8 @@ contract DeployAAInfra is Script {
         bytes4 selRedeem = bytes4(
             keccak256("redeem(uint256,uint256,string,string,bytes32[])")
         );
+        bytes4 selDeposit = bytes4(keccak256("depositStake()"));
+        bytes4 selWithdraw = bytes4(keccak256("withdrawStake(uint256)"));
 
         _deployLane(
             factory,
@@ -94,6 +106,22 @@ contract DeployAAInfra is Script {
             laneRedeem,
             selRedeem
         );
+        _deployLane(
+            factory,
+            deployer,
+            address(passkeyValidator),
+            address(observatory),
+            laneDeposit,
+            selDeposit
+        );
+        _deployLane(
+            factory,
+            deployer,
+            address(passkeyValidator),
+            address(observatory),
+            laneWithdraw,
+            selWithdraw
+        );
 
         if (epDep != 0) {
             paymaster.addDepositToEntryPoint{value: epDep}();
@@ -109,6 +137,8 @@ contract DeployAAInfra is Script {
         console2.log("laneCreate:", uint256(laneCreate));
         console2.log("laneCommit:", uint256(laneCommit));
         console2.log("laneRedeem:", uint256(laneRedeem));
+        console2.log("laneDeposit:", uint256(laneDeposit));
+        console2.log("laneWithdraw:", uint256(laneWithdraw));
     }
 
     function _deployLane(

@@ -260,6 +260,12 @@ contract SmartAccount is IAccount, IModuleManager {
         return laneConfig[laneKey];
     }
 
+    function withdraw(uint256 amount) external onlyOwner {
+        require(address(this).balance >= amount, "insufficient balance");
+        (bool ok, ) = msg.sender.call{value: amount}("");
+        require(ok, "withdraw failed");
+    }
+
     // -----------------------------
     // ERC-4337 v0.7: validateUserOp
     // -----------------------------
