@@ -3,6 +3,7 @@ pragma solidity ^0.8.20;
 
 import {SmartAccount} from "../aa/SmartAccount.sol";
 import {ModuleType} from "../aa/interfaces/ERC7579.sol";
+import {ModeLib} from "../aa/libs/ModeLib.sol";
 
 import {ValidationPreHookAggregator} from "../aa/modules/ValidationPreHookAggregator.sol";
 import {NonceBoundCallDataValidationHook} from "../aa/modules/NonceBoundCallDataValidationHook.sol";
@@ -90,7 +91,10 @@ contract SmartAccountEchidnaHarness {
             uint32(0),
             hooks
         );
-        account.execute(address(vph), 0, data);
+        account.execute(
+            ModeLib.encodeSimpleSingle(),
+            ModeLib.encodeSingleCalldata(address(vph), 0, data)
+        );
 
         // Configure execution hook aggregator (pre=[allowAll], post=[])
         address[] memory pre = new address[](1);
@@ -105,7 +109,10 @@ contract SmartAccountEchidnaHarness {
             pre,
             post
         );
-        account.execute(address(eha), 0, data2);
+        account.execute(
+            ModeLib.encodeSimpleSingle(),
+            ModeLib.encodeSingleCalldata(address(eha), 0, data2)
+        );
     }
 
     function _lane0()

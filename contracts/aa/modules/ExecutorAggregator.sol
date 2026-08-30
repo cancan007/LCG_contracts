@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.20;
 
-import {IExecutor, IModule, ModuleType} from "../interfaces/ERC7579.sol";
+import {
+    IExecutor,
+    IAccountExecution,
+    IModule,
+    ModuleType
+} from "../interfaces/ERC7579.sol";
+import {ModeLib} from "../libs/ModeLib.sol";
 import {VersionedAggregatorBase} from "./VersionedAggregatorBase.sol";
 
 contract ExecutorAggregator is VersionedAggregatorBase, IExecutor {
@@ -65,15 +71,20 @@ contract ExecutorAggregator is VersionedAggregatorBase, IExecutor {
         return executors;
     }
 
-    function execute(
-        address to,
-        uint256 value,
-        bytes calldata data
-    ) external override returns (bytes memory ret) {
-        address[] memory list = _activeExecutors;
-        for (uint256 i = 0; i < list.length; i++) {
-            ret = IExecutor(list[i]).execute(to, value, data);
-        }
+    /// @notice Trigger execution on `account` as the installed executor.
+    /// @dev ExecutorAggregator is the module installed on the account.
+    ///      _activeExecutors are retained for policy validation hooks (future work).
+    ///      msg.sender to the target is always the SmartAccount.
+    function executeOn(
+        address account,
+        bytes32 mode,
+        bytes calldata executionCalldata
+    ) external returns (bytes[] memory) {
+        return
+            IAccountExecution(account).executeFromExecutor(
+                mode,
+                executionCalldata
+            );
     }
 
     // -----------------------------

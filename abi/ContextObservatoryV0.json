@@ -51,6 +51,25 @@
   },
   {
     "type": "function",
+    "name": "allowedPosts",
+    "inputs": [
+      {
+        "name": "user",
+        "type": "address",
+        "internalType": "address"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "",
+        "type": "uint32",
+        "internalType": "uint32"
+      }
+    ],
+    "stateMutability": "view"
+  },
+  {
+    "type": "function",
     "name": "author",
     "inputs": [],
     "outputs": [

@@ -11,9 +11,11 @@ import {
     IValidator,
     IExecutor,
     IHook,
-    IModuleManager
+    IModuleManager,
+    IAccountExecution
 } from "./interfaces/ERC7579.sol";
 import {IValidationHook} from "./interfaces/IValidationHook.sol";
+import {ModeLib} from "./libs/ModeLib.sol";
 
 interface IPasskeyCredentialStore {
     function getPasskeyCredential()
@@ -37,8 +39,8 @@ interface IPasskeyCredentialStore {
 /// Design notes:
 /// - laneKey selection is derived from userOp.nonce ([uint192 laneKey | uint64 seq]).
 /// - nonceSequence is updated ONLY after successful validation (preHook + validator).
-/// - manual execute() keeps the same signature; laneKey can be wrapped into `data`:
-///     data = abi.encode(uint192 laneKey, bytes innerCallData)
+/// - execute() / executeFromExecutor() take an ERC-7579 (mode, executionCalldata) pair;
+///   the laneKey mode carries the laneKey inside executionCalldata (see ModeLib).
 contract SmartAccount is IAccount, IModuleManager {
     // -----------------------------
     // Constants
@@ -53,11 +55,13 @@ contract SmartAccount is IAccount, IModuleManager {
     // -----------------------------
     error NotEntryPoint();
     error NotOwner();
+    error NotAuthorized();
     error ModuleAlreadyInstalled();
     error ModuleNotInstalled();
     error InvalidModuleType();
     error ValidatorNotSet();
     error InvalidNonce();
+    error UnsupportedCallType(bytes1 callType);
 
     // -----------------------------
     // Events
@@ -137,6 +141,18 @@ contract SmartAccount is IAccount, IModuleManager {
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
+        _;
+    }
+
+    modifier onlyEntryPointOrOwner() {
+        if (msg.sender != address(entryPoint) && msg.sender != owner)
+            revert NotAuthorized();
+        _;
+    }
+
+    modifier onlyInstalledExecutor() {
+        if (!_moduleInstalled[ModuleType.EXECUTOR][msg.sender])
+            revert ModuleNotInstalled();
         _;
     }
 
@@ -325,7 +341,7 @@ contract SmartAccount is IAccount, IModuleManager {
         uint256 fullNonce
     ) external onlyEntryPoint returns (bytes memory ret) {
         (uint192 laneKey, ) = _splitNonce(fullNonce);
-        return _executeForLaneCalldata(laneKey, msg.sender, to, value, data);
+        return _exec(laneKey, to, value, data);
     }
 
     /// @notice Backward-compatible EntryPoint method that takes an explicit laneKey.
@@ -335,63 +351,65 @@ contract SmartAccount is IAccount, IModuleManager {
         uint256 value,
         bytes calldata data
     ) external onlyEntryPoint returns (bytes memory ret) {
-        return _executeForLaneCalldata(laneKey, msg.sender, to, value, data);
+        return _exec(laneKey, to, value, data);
     }
 
-    /// @notice Manual path: owner or installed executor module can call.
-    /// @dev laneKey can be embedded into `data` as abi.encode(uint192 laneKey, bytes innerCallData).
+    // -----------------------------
+    // ERC-7579: execute / executeFromExecutor
+    // -----------------------------
+
+    /// @notice ERC-7579 compliant execute.
+    /// @dev Called by EntryPoint (after UserOp validation) or directly by owner.
+    ///      Supported modes: CALLTYPE_SINGLE (standard or laneKey variant).
+    ///      msg.sender to the target is always this SmartAccount — not a module.
     function execute(
-        address to,
-        uint256 value,
-        bytes calldata data
-    ) external returns (bytes memory ret) {
-        if (msg.sender != owner && !_isExecutor(msg.sender)) revert NotOwner();
-
-        (uint192 laneKey, bytes memory inner) = _decodeLaneDataOrDefaultMemory(
-            data
-        );
-        return _executeForLaneMemory(laneKey, msg.sender, to, value, inner);
+        bytes32 mode,
+        bytes calldata executionCalldata
+    ) external onlyEntryPointOrOwner returns (bytes[] memory returnData) {
+        return _executeWithMode(mode, executionCalldata);
     }
 
-    function _executeForLaneCalldata(
-        uint192 laneKey,
-        address caller,
-        address to,
-        uint256 value,
-        bytes calldata data
-    ) internal returns (bytes memory) {
-        LaneConfig memory cfg = _laneOrDefault(laneKey);
+    /// @notice Called by installed executor modules to trigger execution on this account.
+    /// @dev Executor modules must be installed via installModule(EXECUTOR, ...) first.
+    ///      This keeps msg.sender = SmartAccount for the target, regardless of which
+    ///      executor module initiated the call.
+    function executeFromExecutor(
+        bytes32 mode,
+        bytes calldata executionCalldata
+    ) external onlyInstalledExecutor returns (bytes[] memory returnData) {
+        return _executeWithMode(mode, executionCalldata);
+    }
 
-        bytes memory hookData;
-        if (cfg.execHook != address(0)) {
-            hookData = IHook(cfg.execHook).preCheck(
-                caller,
-                value,
-                abi.encode(laneKey, to, value, data)
-            );
-        }
+    function _executeWithMode(
+        bytes32 mode,
+        bytes calldata executionCalldata
+    ) internal returns (bytes[] memory returnData) {
+        bytes1 callType = ModeLib.getCallType(mode);
 
-        bytes memory out;
-        if (cfg.executor != address(0)) {
-            if (!_moduleInstalled[ModuleType.EXECUTOR][cfg.executor])
-                revert ModuleNotInstalled();
-            out = IExecutor(cfg.executor).execute(to, value, data);
+        if (callType == ModeLib.CALLTYPE_SINGLE) {
+            returnData = new bytes[](1);
+            if (ModeLib.isLane(mode)) {
+                (
+                    uint192 laneKey,
+                    address to,
+                    uint256 value,
+                    bytes memory data
+                ) = ModeLib.decodeLane(executionCalldata);
+                returnData[0] = _exec(laneKey, to, value, data);
+            } else {
+                (address to, uint256 value, bytes calldata data) = ModeLib
+                    .decodeSingle(executionCalldata);
+                returnData[0] = _exec(DEFAULT_LANE, to, value, data);
+            }
         } else {
-            (bool success, bytes memory retdata) = to.call{value: value}(data);
-            if (!success) _bubble(retdata);
-            out = retdata;
+            revert UnsupportedCallType(callType);
         }
-
-        if (cfg.execHook != address(0)) {
-            IHook(cfg.execHook).postCheck(hookData);
-        }
-
-        return out;
     }
 
-    function _executeForLaneMemory(
+    /// @dev Core execution: runs execHook, then calls target. Executor routing is
+    ///      intentionally removed — executors call executeFromExecutor() instead.
+    function _exec(
         uint192 laneKey,
-        address caller,
         address to,
         uint256 value,
         bytes memory data
@@ -401,28 +419,20 @@ contract SmartAccount is IAccount, IModuleManager {
         bytes memory hookData;
         if (cfg.execHook != address(0)) {
             hookData = IHook(cfg.execHook).preCheck(
-                caller,
+                msg.sender,
                 value,
                 abi.encode(laneKey, to, value, data)
             );
         }
 
-        bytes memory out;
-        if (cfg.executor != address(0)) {
-            if (!_moduleInstalled[ModuleType.EXECUTOR][cfg.executor])
-                revert ModuleNotInstalled();
-            out = IExecutor(cfg.executor).execute(to, value, data);
-        } else {
-            (bool success, bytes memory retdata) = to.call{value: value}(data);
-            if (!success) _bubble(retdata);
-            out = retdata;
-        }
+        (bool success, bytes memory retdata) = to.call{value: value}(data);
+        if (!success) _bubble(retdata);
 
         if (cfg.execHook != address(0)) {
             IHook(cfg.execHook).postCheck(hookData);
         }
 
-        return out;
+        return retdata;
     }
 
     function _bubble(bytes memory retdata) internal pure {
@@ -514,10 +524,6 @@ contract SmartAccount is IAccount, IModuleManager {
         emit ModuleInstalled(moduleTypeId, module);
     }
 
-    function _isExecutor(address maybeExecutor) internal view returns (bool) {
-        return _moduleInstalled[ModuleType.EXECUTOR][maybeExecutor];
-    }
-
     function _laneOrDefault(
         uint192 laneKey
     ) internal view returns (LaneConfig memory cfg) {
@@ -536,26 +542,5 @@ contract SmartAccount is IAccount, IModuleManager {
     ) internal pure returns (uint192 key, uint64 seq) {
         key = uint192(fullNonce >> 64);
         seq = uint64(fullNonce);
-    }
-
-    /// @dev Wrap format:
-    ///   abi.encode(uint192 laneKey, bytes innerCallData)
-    /// If `data` is not in this format, returns (DEFAULT_LANE, data).
-    function _decodeLaneDataOrDefaultMemory(
-        bytes calldata data
-    ) internal pure returns (uint192 laneKey, bytes memory inner) {
-        if (data.length < 64) {
-            return (DEFAULT_LANE, data);
-        }
-
-        uint256 offset;
-        assembly {
-            offset := calldataload(add(data.offset, 0x20))
-        }
-        if (offset != 0x40) {
-            return (DEFAULT_LANE, data);
-        }
-
-        (laneKey, inner) = abi.decode(data, (uint192, bytes));
     }
 }

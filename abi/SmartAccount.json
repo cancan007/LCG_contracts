@@ -51,26 +51,21 @@
     "name": "execute",
     "inputs": [
       {
-        "name": "to",
-        "type": "address",
-        "internalType": "address"
+        "name": "mode",
+        "type": "bytes32",
+        "internalType": "bytes32"
       },
       {
-        "name": "value",
-        "type": "uint256",
-        "internalType": "uint256"
-      },
-      {
-        "name": "data",
+        "name": "executionCalldata",
         "type": "bytes",
         "internalType": "bytes"
       }
     ],
     "outputs": [
       {
-        "name": "ret",
-        "type": "bytes",
-        "internalType": "bytes"
+        "name": "returnData",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
       }
     ],
     "stateMutability": "nonpayable"
@@ -105,6 +100,30 @@
         "name": "ret",
         "type": "bytes",
         "internalType": "bytes"
+      }
+    ],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
+    "name": "executeFromExecutor",
+    "inputs": [
+      {
+        "name": "mode",
+        "type": "bytes32",
+        "internalType": "bytes32"
+      },
+      {
+        "name": "executionCalldata",
+        "type": "bytes",
+        "internalType": "bytes"
+      }
+    ],
+    "outputs": [
+      {
+        "name": "returnData",
+        "type": "bytes[]",
+        "internalType": "bytes[]"
       }
     ],
     "stateMutability": "nonpayable"
@@ -565,6 +584,19 @@
   },
   {
     "type": "function",
+    "name": "withdraw",
+    "inputs": [
+      {
+        "name": "amount",
+        "type": "uint256",
+        "internalType": "uint256"
+      }
+    ],
+    "outputs": [],
+    "stateMutability": "nonpayable"
+  },
+  {
+    "type": "function",
     "name": "withdrawDepositTo",
     "inputs": [
       {
@@ -822,6 +854,11 @@
   },
   {
     "type": "error",
+    "name": "NotAuthorized",
+    "inputs": []
+  },
+  {
+    "type": "error",
     "name": "NotEntryPoint",
     "inputs": []
   },
@@ -829,6 +866,17 @@
     "type": "error",
     "name": "NotOwner",
     "inputs": []
+  },
+  {
+    "type": "error",
+    "name": "UnsupportedCallType",
+    "inputs": [
+      {
+        "name": "callType",
+        "type": "bytes1",
+        "internalType": "bytes1"
+      }
+    ]
   },
   {
     "type": "error",

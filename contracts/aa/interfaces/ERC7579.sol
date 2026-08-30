@@ -38,13 +38,19 @@ interface IValidator is IModule {
     ) external view returns (bytes4);
 }
 
-/// @dev Executor module (ERC-7579 only requires IModule; execute() is a common extension we use internally).
-interface IExecutor is IModule {
-    function execute(
-        address to,
-        uint256 value,
-        bytes calldata data
-    ) external returns (bytes memory ret);
+/// @dev Executor module (ERC-7579).
+/// Executors do NOT execute directly — they call IAccountExecution.executeFromExecutor()
+/// on the account they are installed on. This keeps msg.sender = SmartAccount for all
+/// target contracts, regardless of which executor module triggered the call.
+interface IExecutor is IModule {}
+
+/// @dev Account-side interface that executor modules call back into.
+/// The account MUST restrict this to installed executor modules only.
+interface IAccountExecution {
+    function executeFromExecutor(
+        bytes32 mode,
+        bytes calldata executionCalldata
+    ) external returns (bytes[] memory returnData);
 }
 
 /// @dev ERC-7579 hook interface (optional extension in ERC-7579).
